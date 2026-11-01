@@ -11,6 +11,10 @@ from src.predictive_maintenance.data.loader import load_raw_data
 from src.predictive_maintenance.data.preprocessing import DataProcessor
 from src.predictive_maintenance.data.splitting import create_initial_data_splits
 
+from src.predictive_maintenance.data.persistence import (
+    load_preprocessing_pipeline,
+    save_preprocessing_pipeline,
+)
 
 DATASET_PATH = (
     Path(__file__).resolve().parents[2]
@@ -99,3 +103,34 @@ def test_training_sample_weights(prepared_data) -> None:
     )
 
     assert set(weights.index).isdisjoint(other_indexes)
+
+
+def test_pipeline_persistence_and_inference(
+    prepared_data,
+    tmp_path: Path,
+) -> None:
+    """Verify fitted pipeline persistence and inference consistency."""
+    processor, splits = prepared_data
+
+    pipeline = processor.create_preprocessing_pipeline()
+    pipeline.fit(splits.X_train)
+
+    # Simulate new observations without known target labels.
+    new_observations = splits.X_future.iloc[:10].copy()
+    inference_features = processor.select_features(new_observations)
+
+    original_result = pipeline.transform(inference_features)
+
+    artifact_path = tmp_path / "preprocessing.joblib"
+
+    save_preprocessing_pipeline(pipeline, artifact_path)
+    assert artifact_path.is_file()
+
+    restored_pipeline = load_preprocessing_pipeline(artifact_path)
+    restored_result = restored_pipeline.transform(inference_features)
+
+    pd.testing.assert_frame_equal(original_result, restored_result)
+
+    assert restored_result.shape == (10, 9)
+    assert not restored_result.isna().any().any()
+    assert "target" not in restored_result.columns
