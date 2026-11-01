@@ -15,7 +15,7 @@ def mock_predict(data: PredictionRequest) -> PredictionResponse:
     )
 
 def mock_train(data: TrainingRequest) -> TrainingResponse:
-    """Szimulálja egy tanítási művelet sikeres befejezését."""
+    """return a fixed training response for testing purposes."""
     return TrainingResponse(
         status="mock_completed",
         training_run_id=None,
