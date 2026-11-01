@@ -4,6 +4,8 @@
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 
 COLUMN_MAPPING = {
@@ -144,5 +146,59 @@ class DataProcessor:
         )
 
         return transformer.set_output(transform="pandas")
+
+    
+    def create_preprocessing_pipeline(self) -> Pipeline:
+        """Create an unfitted sklearn preprocessing pipeline.
+
+        The pipeline performs feature engineering, missing value
+        imputation, numerical scaling and categorical encoding.
+
+        All learned transformations must be fitted on training data only.
+        """
+        numeric_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+            ]
+        )
+
+        categorical_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                (
+                    "encoder",
+                    OneHotEncoder(
+                        handle_unknown="ignore",
+                        sparse_output=False,
+                    ),
+                ),
+            ]
+        )
+
+        column_transformer = ColumnTransformer(
+            transformers=[
+                ("numeric", numeric_pipeline, list(NUMERIC_FEATURES)),
+                ("categorical", categorical_pipeline, list(CATEGORICAL_FEATURES)),
+            ],
+            remainder="drop",
+            verbose_feature_names_out=False,
+        ).set_output(transform="pandas")
+
+        preprocessing_pipeline = Pipeline(
+            steps=[
+                (
+                    "feature_engineering",
+                    FunctionTransformer(
+                        self.add_engineered_features,
+                        validate=False,
+                    ),
+                ),
+                ("preprocessor", column_transformer),
+            ]
+        )
+
+        return preprocessing_pipeline
+
 
 
