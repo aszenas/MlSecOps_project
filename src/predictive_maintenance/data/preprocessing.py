@@ -47,6 +47,33 @@ ENGINEERED_FEATURES = (
     "temperature_difference_k",
 )
 
+def engineer_temperature_difference(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate temperature difference without modifying input data."""
+    required_columns = (
+        "air_temperature_k",
+        "process_temperature_k",
+    )
+
+    missing = [
+        column for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            f"Missing columns for feature engineering: {missing}"
+        )
+
+    if df.empty:
+        raise ValueError("Input DataFrame is empty.")
+
+    result = df.copy()
+    result["temperature_difference_k"] = (
+        result["process_temperature_k"] - result["air_temperature_k"]
+    )
+
+    return result
+
 class DataProcessor:
     """Prepare predictive maintenance data for classification."""
 
@@ -100,32 +127,9 @@ class DataProcessor:
         return features, target.copy()
     
     def add_engineered_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add temperature difference without modifying input data."""
-        required = (
-            "air_temperature_k",
-            "process_temperature_k",
-        )
+        """Add engineered features to the input data."""
+        return engineer_temperature_difference(df)
 
-        missing = [column for column in required if column not in df.columns]
-
-        if missing:
-            raise ValueError(
-                f"Missing columns for feature engineering: {missing}"
-            )
-
-        if df.empty:
-            raise ValueError("Input DataFrame is empty.")
-
-        result = df.copy()
-
-        result["temperature_difference_k"] = (
-            result["process_temperature_k"]
-            - result["air_temperature_k"]
-        )
-
-        return result
-
-    
     def create_imputer(self) -> ColumnTransformer:
         """Create an unfitted transformer for missing value imputation."""
         numeric_imputer = SimpleImputer(
@@ -147,7 +151,6 @@ class DataProcessor:
 
         return transformer.set_output(transform="pandas")
 
-    
     def create_preprocessing_pipeline(self) -> Pipeline:
         """Create an unfitted sklearn preprocessing pipeline.
 
@@ -190,7 +193,7 @@ class DataProcessor:
                 (
                     "feature_engineering",
                     FunctionTransformer(
-                        self.add_engineered_features,
+                        engineer_temperature_difference,
                         validate=False,
                     ),
                 ),
