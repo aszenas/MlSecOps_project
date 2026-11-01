@@ -1,6 +1,8 @@
 
 """Integration tests for the predictive maintenance data pipeline."""
 
+from typing import cast
+
 from pathlib import Path
 
 import pandas as pd
@@ -91,8 +93,8 @@ def test_training_sample_weights(prepared_data) -> None:
     assert weights.index.equals(splits.X_train.index)
     assert (weights > 0).all()
 
-    normal_weight = weights[splits.y_train == 0].iloc[0]
-    failure_weight = weights[splits.y_train == 1].iloc[0]
+    normal_weight = cast(pd.Series, weights.loc[splits.y_train == 0]).iloc[0]
+    failure_weight = cast(pd.Series, weights.loc[splits.y_train == 1]).iloc[0]
 
     assert failure_weight > normal_weight
 

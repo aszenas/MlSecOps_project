@@ -1,6 +1,8 @@
 
 """Unit tests for feature selection and preprocessing."""
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -119,13 +121,14 @@ def test_temperature_difference(sample_features: pd.DataFrame) -> None:
 
     result = processor.add_engineered_features(sample_features)
 
-    expected = (
+    expected = cast(
+        pd.Series,
         sample_features["process_temperature_k"]
-        - sample_features["air_temperature_k"]
+        - sample_features["air_temperature_k"],
     )
 
     pd.testing.assert_series_equal(
-        result["temperature_difference_k"],
+        cast(pd.Series, result["temperature_difference_k"]),
         expected.rename("temperature_difference_k"),
     )
 
@@ -174,7 +177,7 @@ def test_missing_value_imputation(
     invalid = sample_features.copy()
 
     invalid.loc[0, "torque_nm"] = np.nan
-    invalid.loc[1, "type"] = None
+    invalid.loc[1, "type"] = np.nan
 
     pipeline = processor.create_preprocessing_pipeline()
     result = pipeline.fit_transform(invalid)
@@ -251,3 +254,49 @@ def test_train_only_statistics(
     pipeline.transform(validation)
 
     np.testing.assert_array_equal(mean_before, scaler.mean_)
+
+
+# Additional coverage for less common validation and imputation paths.
+
+def test_feature_engineering_rejects_empty_dataframe(
+    sample_features: pd.DataFrame,
+) -> None:
+    """An empty frame with required columns must be rejected."""
+    with pytest.raises(ValueError, match="empty"):
+        engineer_temperature_difference(sample_features.iloc[:0])
+
+
+def test_renaming_rejects_duplicate_output_names(
+    sample_features: pd.DataFrame,
+) -> None:
+    """A raw and already-renamed field cannot share a final name."""
+    df = sample_features.assign(Type="L")
+    with pytest.raises(ValueError, match="Duplicate column names"):
+        DataProcessor().rename_columns(df)
+
+
+def test_select_features_rejects_empty_dataframe(
+    sample_features: pd.DataFrame,
+) -> None:
+    """Selecting from empty input should not silently succeed."""
+    with pytest.raises(ValueError, match="empty"):
+        DataProcessor().select_features(sample_features.iloc[:0])
+
+
+def test_split_rejects_missing_target(sample_features: pd.DataFrame) -> None:
+    """Model training requires a target column."""
+    with pytest.raises(ValueError, match="Missing target column"):
+        DataProcessor().split_features_target(sample_features)
+
+
+def test_imputer_handles_missing_values(sample_features: pd.DataFrame) -> None:
+    """The standalone imputer learns numeric medians and categorical modes."""
+    processor = DataProcessor()
+    engineered = processor.add_engineered_features(sample_features)
+    engineered.loc[0, "torque_nm"] = float("nan")
+    engineered.loc[1, "type"] = np.nan
+    imputer = processor.create_imputer()
+    transformed = imputer.fit_transform(engineered)
+    assert isinstance(transformed, pd.DataFrame)
+    assert transformed.shape == (6, 7)
+    assert not transformed.isna().any().any()

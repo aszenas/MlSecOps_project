@@ -151,3 +151,13 @@ def test_invalid_product_type(valid_raw_data: pd.DataFrame) -> None:
 
     with pytest.raises(ValueError, match="Unexpected product types"):
         validate_raw_data(invalid)
+
+
+def test_loader_rejects_non_string_product_id(
+    valid_raw_data: pd.DataFrame,
+) -> None:
+    """Raw schema rejects non-text Product ID values."""
+    invalid = valid_raw_data.copy()
+    invalid["Product ID"] = [101, 102, 103]
+    with pytest.raises(ValueError, match="Product ID.*strings"):
+        validate_raw_data(invalid)

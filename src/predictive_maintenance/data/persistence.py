@@ -27,7 +27,6 @@ def save_preprocessing_pipeline(
     return path
 
 
-
 def load_preprocessing_pipeline(
     artifact_path: str | Path,
 ) -> Pipeline:
@@ -57,4 +56,3 @@ def load_preprocessing_pipeline(
     check_is_fitted(pipeline)
 
     return pipeline
-

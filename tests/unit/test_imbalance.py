@@ -1,6 +1,8 @@
 
 """Unit tests for class imbalance analysis and sample weighting."""
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -66,8 +68,8 @@ def test_sample_weights(imbalanced_target: pd.Series) -> None:
     """Balanced sample weights should match the expected formula."""
     weights = calculate_sample_weights(imbalanced_target)
 
-    normal_weight = weights[imbalanced_target == 0].iloc[0]
-    failure_weight = weights[imbalanced_target == 1].iloc[0]
+    normal_weight = cast(pd.Series, weights.loc[imbalanced_target == 0]).iloc[0]
+    failure_weight = cast(pd.Series, weights.loc[imbalanced_target == 1]).iloc[0]
 
     assert np.isclose(normal_weight, 100 / (2 * 90))
     assert np.isclose(failure_weight, 100 / (2 * 10))
@@ -101,7 +103,7 @@ def test_retraining_weights() -> None:
     initial_weights = calculate_sample_weights(initial)
     updated_weights = calculate_sample_weights(updated)
 
-    initial_failure_weight = initial_weights[initial == 1].iloc[0]
-    updated_failure_weight = updated_weights[updated == 1].iloc[0]
+    initial_failure_weight = cast(pd.Series, initial_weights.loc[initial == 1]).iloc[0]
+    updated_failure_weight = cast(pd.Series, updated_weights.loc[updated == 1]).iloc[0]
 
     assert updated_failure_weight < initial_failure_weight

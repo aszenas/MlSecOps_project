@@ -2,6 +2,8 @@
 """Reproducible stratified data splitting for predictive maintenance."""
 
 from dataclasses import dataclass
+from typing import cast
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -51,37 +53,46 @@ def create_initial_data_splits(
     if not X.index.is_unique:
         raise ValueError("Dataset indexes must be unique.")
 
-    if y.isna().any() or not y.isin([0, 1]).all():
+    if bool(y.isna().any()) or not bool(y.isin([0, 1]).all()):
         raise ValueError("Target must contain only 0 and 1 without missing values.")
 
     if y.nunique() != 2:
         raise ValueError("Both target classes must be present.")
 
     # Final test set
-    X_remaining, X_test, y_remaining, y_test = train_test_split(
-        X,
-        y,
-        test_size=FINAL_TEST_SIZE,
-        stratify=y,
-        random_state=random_state,
+    X_remaining, X_test, y_remaining, y_test = cast(
+        tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+        train_test_split(
+            X,
+            y,
+            test_size=FINAL_TEST_SIZE,
+            stratify=y,
+            random_state=random_state,
+        ),
     )
 
     # Data for future observations, monitoring and drift simulation
-    X_remaining, X_future, y_remaining, y_future = train_test_split(
-        X_remaining,
-        y_remaining,
-        test_size=FUTURE_SIZE,
-        stratify=y_remaining,
-        random_state=random_state,
+    X_remaining, X_future, y_remaining, y_future = cast(
+        tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+        train_test_split(
+            X_remaining,
+            y_remaining,
+            test_size=FUTURE_SIZE,
+            stratify=y_remaining,
+            random_state=random_state,
+        ),
     )
 
     # Validation + initial training partitions
-    X_train, X_validation, y_train, y_validation = train_test_split(
-        X_remaining,
-        y_remaining,
-        test_size=VALIDATION_SIZE,
-        stratify=y_remaining,
-        random_state=random_state,
+    X_train, X_validation, y_train, y_validation = cast(
+        tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+        train_test_split(
+            X_remaining,
+            y_remaining,
+            test_size=VALIDATION_SIZE,
+            stratify=y_remaining,
+            random_state=random_state,
+        ),
     )
 
     return DataSplits(

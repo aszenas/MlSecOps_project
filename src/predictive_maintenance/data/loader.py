@@ -1,8 +1,8 @@
-
 """Load and validate raw predictive maintenance datasets."""
 
 import csv
 from pathlib import Path
+
 import pandas as pd
 
 
@@ -49,26 +49,32 @@ def validate_raw_data(df: pd.DataFrame) -> None:
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
-    for column in NUMERIC_COLUMNS:
-        if not pd.api.types.is_numeric_dtype(df[column]):
-            raise ValueError(f"Column '{column}' must be numeric.")
-
-        values = df[column].dropna()
-
-        if column in INTEGER_COLUMNS and not (values % 1 == 0).all():
-            raise ValueError(f"Column '{column}' must contain integers.")
+    _validate_numeric_columns(df)
 
     for column in ("Product ID", "Type", "Failure Type"):
         if not pd.api.types.is_string_dtype(df[column]):
             raise ValueError(f"Column '{column}' must contain strings.")
 
     target = df["Target"]
-    if target.isna().any() or not target.isin([0, 1]).all():
+    if bool(target.isna().any()) or not bool(target.isin([0, 1]).all()):
         raise ValueError("Target must contain only 0 and 1, without missing values.")
 
     invalid_types = set(df["Type"].dropna()) - {"L", "M", "H"}
     if invalid_types:
         raise ValueError(f"Unexpected product types: {sorted(invalid_types)}")
+
+
+def _validate_numeric_columns(df: pd.DataFrame) -> None:
+    """Validate numeric and integer-only columns."""
+    for column in NUMERIC_COLUMNS:
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            raise ValueError(f"Column '{column}' must be numeric.")
+
+        values = df[column].dropna()
+
+        if column in INTEGER_COLUMNS and not bool((values % 1 == 0).all()):
+            raise ValueError(f"Column '{column}' must contain integers.")
+
 
 def load_raw_data(data_path: str | Path) -> pd.DataFrame:
     """Load a CSV dataset from a configurable path and validate its schema."""

@@ -1,0 +1,25 @@
+[run]
+source =
+    src
+    tests
+    infra
+    app
+branch = False
+omit =
+    */.venv/*
+    */venv/*
+    */site-packages/*
+    */__pycache__/*
+    */.pytest_cache/*
+    */htmlcov/*
+    */build/*
+    */dist/*
+
+[report]
+show_missing = True
+precision = 2
+fail_under = 95
+skip_empty = True
+
+[html]
+directory = htmlcov

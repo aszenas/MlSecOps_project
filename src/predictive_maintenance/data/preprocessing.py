@@ -1,6 +1,8 @@
 
 """Data preparation and feature selection for predictive maintenance."""
 
+from typing import cast
+
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -47,6 +49,7 @@ ENGINEERED_FEATURES = (
     "temperature_difference_k",
 )
 
+
 def engineer_temperature_difference(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate temperature difference without modifying input data."""
     required_columns = (
@@ -73,6 +76,7 @@ def engineer_temperature_difference(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     return result
+
 
 class DataProcessor:
     """Prepare predictive maintenance data for classification."""
@@ -116,9 +120,9 @@ class DataProcessor:
                 f"Missing target column: {TARGET_COLUMN}"
             )
 
-        target = df[TARGET_COLUMN]
+        target = cast(pd.Series, df[TARGET_COLUMN])
 
-        if target.isna().any() or not target.isin([0, 1]).all():
+        if bool(target.isna().any()) or not bool(target.isin([0, 1]).all()):
             raise ValueError(
                 "Target must contain only 0 and 1, without missing values."
             )
@@ -126,7 +130,7 @@ class DataProcessor:
         features = self.select_features(df)
 
         return features, target.copy()
-    
+
     def add_engineered_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add engineered features to the input data."""
         return engineer_temperature_difference(df)
@@ -203,6 +207,3 @@ class DataProcessor:
         )
 
         return preprocessing_pipeline
-
-
-
