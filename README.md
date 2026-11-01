@@ -19,6 +19,25 @@ MlSecOps_project/
 └── README.md                    # Project overview
 ```
 
+## Data versioning with DVC
+
+The project uses DVC to version datasets separately from the source code. GitHub stores the source code, configuration files, documentation, and DVC metadata, while the actual dataset files are managed by DVC.
+
+### Storage strategy
+
+- **GitHub:** source code, tests, configuration files, documentation, and DVC metadata.
+- **DVC remote:** raw and processed datasets.
+- **Local workspace:** dataset files restored by DVC.
+
+Actual dataset files must not be committed directly to Git or uploaded to GitHub.
+
+### Raw data
+
+The raw dataset is restored to:
+
+```text
+data/raw/
+
 ## Running the API locally
 
 Run the following commands from the project root.
