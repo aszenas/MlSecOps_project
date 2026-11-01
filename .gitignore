@@ -25,10 +25,11 @@ data/raw/*.csv
 data/processed/*.csv
 
 # MLflow and generated artifacts
+mlflow.db
+mlflow.db-*
 mlruns/
 mlartifacts/
 artifacts/
-models/
 
 # Logs and temporary files
 *.log
