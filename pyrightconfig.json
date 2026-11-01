@@ -1,0 +1,27 @@
+{
+  "include": [
+    "src",
+    "tests",
+    "infra",
+    "app"
+  ],
+  "exclude": [
+    "**/.venv",
+    "**/venv",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/htmlcov",
+    "**/build",
+    "**/dist"
+  ],
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": ["src"]
+    }
+  ]
+}
