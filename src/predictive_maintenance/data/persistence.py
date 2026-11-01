@@ -2,6 +2,7 @@
 """Persistence utilities for fitted preprocessing pipelines."""
 
 from pathlib import Path
+import pickle
 
 import joblib
 from sklearn.pipeline import Pipeline
@@ -26,6 +27,7 @@ def save_preprocessing_pipeline(
     return path
 
 
+
 def load_preprocessing_pipeline(
     artifact_path: str | Path,
 ) -> Pipeline:
@@ -37,7 +39,14 @@ def load_preprocessing_pipeline(
 
     try:
         pipeline = joblib.load(path)
-    except (OSError, EOFError, ValueError) as exc:
+    except (
+        OSError,
+        EOFError,
+        ValueError,
+        KeyError,
+        IndexError,
+        pickle.UnpicklingError,
+    ) as exc:
         raise ValueError(
             f"Unable to load preprocessing pipeline: {path}"
         ) from exc
@@ -48,3 +57,4 @@ def load_preprocessing_pipeline(
     check_is_fitted(pipeline)
 
     return pipeline
+
