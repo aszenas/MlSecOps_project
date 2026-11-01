@@ -16,8 +16,9 @@ TRAINING_EXAMPLE = {
     "random_state": 42,
 }
 
-#not the final version of the schema, but a first draft to get the API up and running with moch data. 
-#The final version will be based on the final model features and types
+# not the final version of the schema, but a first draft to get the API up and running with moch data.
+# The final version will be based on the final model features and types
+
 
 class PredictionRequest(BaseModel):
     model_config = ConfigDict(

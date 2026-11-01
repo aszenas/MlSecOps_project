@@ -5,6 +5,7 @@ from predictive_maintenance.api.main import app
 
 client = TestClient(app)
 
+
 @pytest.fixture
 def prediction_data() -> dict[str, str | float]:
     return {
@@ -16,7 +17,8 @@ def prediction_data() -> dict[str, str | float]:
         "tool_wear_min": 198.0,
     }
 
-#TEST HEALTH ENDPOINT
+# TEST HEALTH ENDPOINT
+
 
 def test_health_returns_ok() -> None:
     response = client.get("/health")
@@ -27,7 +29,8 @@ def test_health_returns_ok() -> None:
         "mode": "mock",
     }
 
-#TEST PREDICT ENDPOINT
+# TEST PREDICT ENDPOINT
+
 
 def test_predict_returns_mock_prediction(
     prediction_data: dict[str, str | float],
@@ -42,6 +45,7 @@ def test_predict_returns_mock_prediction(
         "mode": "mock",
     }
 
+
 def test_predict_rejects_missing_field(
     prediction_data: dict[str, str | float],
 ) -> None:
@@ -55,6 +59,7 @@ def test_predict_rejects_missing_field(
         and error["type"] == "missing"
         for error in response.json()["detail"]
     )
+
 
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
@@ -83,6 +88,7 @@ def test_predict_rejects_invalid_value(
         for error in response.json()["detail"]
     )
 
+
 def test_predict_rejects_extra_field(
     prediction_data: dict[str, str | float],
 ) -> None:
@@ -97,7 +103,8 @@ def test_predict_rejects_extra_field(
         for error in response.json()["detail"]
     )
 
-#TEST TRAIN ENDPOINT
+# TEST TRAIN ENDPOINT
+
 
 def test_train_returns_mock_result() -> None:
     response = client.post(
@@ -115,6 +122,7 @@ def test_train_returns_mock_result() -> None:
         "mode": "mock",
     }
 
+
 def test_train_accepts_empty_object() -> None:
     response = client.post("/train", json={})
 
@@ -125,6 +133,7 @@ def test_train_accepts_empty_object() -> None:
         "mode": "mock",
     }
 
+
 def test_train_rejects_missing_body() -> None:
     response = client.post("/train")
 
@@ -134,6 +143,7 @@ def test_train_rejects_missing_body() -> None:
         and error["type"] == "missing"
         for error in response.json()["detail"]
     )
+
 
 @pytest.mark.parametrize(
     ("field", "invalid_value", "error_type"),
@@ -162,6 +172,7 @@ def test_train_rejects_invalid_value(
         and error["type"] == error_type
         for error in response.json()["detail"]
     )
+
 
 def test_train_rejects_extra_field() -> None:
     response = client.post(

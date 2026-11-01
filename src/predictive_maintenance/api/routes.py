@@ -26,6 +26,7 @@ def health() -> dict[str, str]:
 def predict(data: PredictionRequest) -> PredictionResponse:
     return mock_predict(data)
 
+
 @router.post("/train", response_model=TrainingResponse)
 def train(data: TrainingRequest) -> TrainingResponse:
     return mock_train(data)
