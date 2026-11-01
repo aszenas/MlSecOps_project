@@ -96,7 +96,7 @@ For your next task, create a **new feature branch** from the updated `dev` and r
 - No direct commits to main after initialization.
 - Preserve feature branch history.
 - Use meaningful commit messages.
-- At least 40 commits per team member.
+- At least 50 commits per team member.
 - Each feature branch should have a reviewed PR.
 
 ## Commit Examples
