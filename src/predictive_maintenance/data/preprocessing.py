@@ -1,3 +1,6 @@
+
+"""Data preparation and feature selection for predictive maintenance."""
+
 import pandas as pd
 
 
@@ -27,8 +30,10 @@ TARGET_COLUMN = "target"
 
 
 class DataProcessor:
+    """Prepare predictive maintenance data for classification."""
 
     def rename_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Rename raw dataset columns to consistent snake_case names."""
         if df.empty:
             raise ValueError("Input DataFrame is empty.")
 
@@ -40,6 +45,7 @@ class DataProcessor:
         return renamed_df
 
     def select_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Select model input features in a consistent column order."""
         missing_columns = [
             column for column in FEATURE_COLUMNS
             if column not in df.columns
@@ -59,6 +65,7 @@ class DataProcessor:
         self,
         df: pd.DataFrame,
     ) -> tuple[pd.DataFrame, pd.Series]:
+        """Separate model features (X) and binary target (y)."""
         if TARGET_COLUMN not in df.columns:
             raise ValueError(
                 f"Missing target column: {TARGET_COLUMN}"

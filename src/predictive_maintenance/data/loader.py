@@ -1,3 +1,6 @@
+
+"""Load and validate raw predictive maintenance datasets."""
+
 import csv
 from pathlib import Path
 import pandas as pd
@@ -35,6 +38,7 @@ INTEGER_COLUMNS = (
 
 
 def validate_raw_data(df: pd.DataFrame) -> None:
+    """Validate the structure and data types of a raw dataset."""
     if df.empty:
         raise ValueError("The dataset is empty.")
 
@@ -67,6 +71,7 @@ def validate_raw_data(df: pd.DataFrame) -> None:
         raise ValueError(f"Unexpected product types: {sorted(invalid_types)}")
 
 def load_raw_data(data_path: str | Path) -> pd.DataFrame:
+    """Load a CSV dataset from a configurable path and validate its schema."""
     path = Path(data_path)
 
     if not path.is_file():
