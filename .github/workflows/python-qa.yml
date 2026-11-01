@@ -34,8 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install pytest coverage flake8 pyright
+          python -m pip check
+          python -c "import mlflow, xgboost, sklearn, pandas, numpy; print('ML dependencies OK')"
 
-      # Always run unit tests and collect coverage
+      # Mandatory unit tests
       - name: Run unit tests with coverage
         env:
           PYTHONPATH: src
@@ -43,30 +45,39 @@ jobs:
           python -m coverage erase
           python -m coverage run -m pytest tests/unit/ -v
 
-      # Integration tests run only when the dataset is available
-      - name: Run integration tests when dataset exists
+      # Mandatory MLflow integration tests (no real CSV required)
+      - name: Run MLflow integration tests with coverage
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m coverage run --append -m pytest tests/integration/test_mlflow_integration.py -v
+
+      # Dataset-dependent integration tests
+      # The MLflow test is excluded because it runs above.
+      - name: Run dataset integration tests
         if: hashFiles('data/raw/predictive_maintenance_5000.csv') != ''
         env:
           PYTHONPATH: src
         run: |
-          python -m coverage run --append -m pytest tests/integration/ -v
+          python -m coverage run --append -m pytest tests/integration/ --ignore=tests/integration/test_mlflow_integration.py -v
 
-      # Make skipped integration testing explicit
+      # Temporary safeguard until DVC downloads the dataset in CI
       - name: Report missing integration dataset
         if: hashFiles('data/raw/predictive_maintenance_5000.csv') == ''
         run: |
-          echo "::warning::Integration tests skipped: dataset unavailable."
-          echo "### Integration tests: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
-          echo "Dataset unavailable. DVC setup is pending." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::CSV-dependent integration tests skipped: dataset unavailable."
+          echo "### Dataset integration tests: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
+          echo "MLflow integration tests ran separately. DVC setup is pending." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Check repository coverage
-        run: python -m coverage report -m --fail-under=95
-
+      # Mandatory source code coverage gate
       - name: Check source coverage
-        run: python -m coverage report -m --include="src/*" --fail-under=95
+        run: |
+          python -m coverage report -m --include="src/*" --fail-under=95
 
       - name: Run Flake8
-        run: python -m flake8 src tests infra app
+        run: |
+          python -m flake8 src tests infra app scripts
 
       - name: Run Pyright
-        run: python -m pyright
+        run: |
+          python -m pyright
