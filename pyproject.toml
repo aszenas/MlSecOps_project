@@ -11,3 +11,20 @@ markers = [
     "integration: integration tests",
     "smoke: system smoke tests",
 ]
+
+[tool.coverage.run]
+source = ["src", "tests"]
+branch = false
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = false
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"

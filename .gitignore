@@ -40,3 +40,17 @@ models/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Test and coverage outputs
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
