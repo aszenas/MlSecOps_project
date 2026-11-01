@@ -120,6 +120,7 @@ class DataProcessor:
 
         if target.isna().any() or not target.isin([0, 1]).all():
             raise ValueError(
+                "Target must contain only 0 and 1, without missing values."
             )
 
         features = self.select_features(df)
