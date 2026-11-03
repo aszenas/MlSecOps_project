@@ -1,25 +1,23 @@
 # API Contract
 
-This document describes the current mock API.
+This document describes the current API: real model training with MLflow tracking and mock prediction.
 
 Base URL for local development: `http://127.0.0.1:8000`
 
-Interactive documentation: `/docs`
+Interactive documentation: `/docs`  
 OpenAPI specification: `/openapi.json`
 
 POST endpoints accept JSON request bodies.
 
 ## GET /health
 
-Checks whether the API is responding. It does not check model availability
-or external services.
+Checks whether the API is responding. It does not check dataset availability, model availability, or external services.
 
 ### Successful response — 200 OK
 
 ```json
 {
-  "status": "ok",
-  "mode": "mock"
+  "status": "ok"
 }
 ```
 
@@ -40,9 +38,7 @@ All fields are required. Null values and additional fields are rejected.
 | `torque_nm` | number | Finite, at least 0 | Torque in newton-metres |
 | `tool_wear_min` | number | Finite, at least 0 | Tool usage time in minutes |
 
-The schemas use Pydantic's default type conversion rather than strict
-type validation. For example, a numeric string such as `"300.8"` can be
-converted to a number. Clients should send measurements as JSON numbers.
+The numeric fields use Pydantic's default type conversion rather than strict type validation. For example, a numeric string such as `"300.8"` can be converted to a number. Clients should send measurements as JSON numbers.
 
 ### Example request
 
@@ -72,39 +68,71 @@ converted to a number. Clients should send measurements as JSON numbers.
 | --- | --- |
 | `prediction` | `0`: no failure; `1`: failure |
 | `probability` | Probability of failure, between 0 and 1 |
-| `model_version` | Identifier of the model producing the result |
-| `mode` | Execution mode; currently always `"mock"` |
+| `model_version` | Model identifier; currently `"mock-v1"` |
+| `mode` | Currently always `"mock"` for this endpoint |
 
-In the current implementation, every valid request returns the response
-shown above. The input is validated but is not used to calculate a prediction.
+Every valid request currently returns the response shown above. The input is validated but is not used to calculate a prediction.
 
 The returned probability is a fixed test value, not a real model estimate.
 
 ## POST /train
 
-Accepts training settings and simulates successful completion.
+Loads the configured initial dataset, trains the selected model, evaluates it on the validation partition, and logs the results to MLflow.
 
 ### Request fields
+
+All request fields have defaults. Additional fields and explicit null values are rejected.
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
 | `dataset_id` | string | `"default"` | Only `"default"` is accepted |
-| `random_state` | integer | `42` | Must be at least 0 |
+| `model_type` | string | `"gradient_boosting"` | `"gradient_boosting"` or `"xgboost"` |
+| `random_state` | integer | `42` | Only `42` is accepted |
 
-Additional fields and explicit null values are rejected.
-Pydantic's default type conversion also applies to this request.
+`dataset_id` identifies the configured dataset:
 
-`dataset_id` is a logical dataset identifier, not a file path.
-The mock implementation does not load a dataset.
+```text
+data/raw/predictive_maintenance_5000.csv
+```
 
-`random_state` is reserved for reproducible training. The mock
-implementation validates it but does not use it in a training operation.
+This path is relative to the repository root. It refers to the root-level data directory, not the Python modules under `src/predictive_maintenance/data/`.
+
+Clients cannot supply an arbitrary file path.
+
+`model_type` selects either Gradient Boosting or XGBoost.
+
+`random_state` is restricted to the numeric literal `42`, matching the fixed initial splitting and model-training configuration. The string `"42"` is not accepted.
+
+### Data preparation and training
+
+The initial dataset must contain exactly 5,000 records with the original raw CSV columns.
+
+The training service:
+
+1. Loads and validates the raw CSV.
+2. Normalizes column names.
+3. Separates the six input features from the binary target.
+4. Creates reproducible, stratified dataset partitions.
+5. Trains and evaluates the selected model.
+6. Logs the training results to MLflow.
+
+| Partition | Records | Purpose |
+| --- | ---: | --- |
+| Training | 3,000 | Fit preprocessing and the classifier |
+| Validation | 750 | Calculate validation metrics |
+| Future | 750 | Reserved for later monitoring and retraining work |
+| Final test | 500 | Reserved for final evaluation |
+
+Training uses only the training partition. The current training operation calculates metrics on the validation partition; it does not evaluate the final-test partition.
+
+This splitting procedure is intended for the initial dataset. Future retraining must preserve the fixed validation and final-test partitions.
 
 ### Example request
 
 ```json
 {
   "dataset_id": "default",
+  "model_type": "gradient_boosting",
   "random_state": 42
 }
 ```
@@ -115,27 +143,87 @@ An empty JSON object is also accepted and uses the defaults:
 {}
 ```
 
-The request body itself is required. Omitting the body is different
-from sending an empty JSON object and returns HTTP `422`.
+The request body itself is required. Omitting it is different from sending `{}` and returns HTTP `422`.
 
 ### Successful response — 200 OK
 
+The following response is illustrative. The identifiers and metric values depend on the actual training run.
+
 ```json
 {
-  "status": "mock_completed",
-  "training_run_id": null,
-  "mode": "mock"
+  "status": "completed",
+  "training_run_id": "<actual-run-id>",
+  "model_type": "gradient_boosting",
+  "model_uri": "<actual-model-uri>",
+  "metrics": {
+    "accuracy": 0.95,
+    "precision": 0.80,
+    "recall": 0.75,
+    "f1": 0.77,
+    "roc_auc": 0.90,
+    "average_precision": 0.85
+  },
+  "mode": "real"
 }
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `"mock_completed"` indicates simulated completion |
-| `training_run_id` | Reserved for a future MLflow run ID; currently `null` |
-| `mode` | Execution mode; currently always `"mock"` |
+| `status` | `"completed"` indicates successful completion |
+| `training_run_id` | The actual MLflow training run ID |
+| `model_type` | The selected classifier |
+| `model_uri` | URI used to load the logged preprocessing and model pipeline |
+| `metrics` | Six metrics calculated on the validation partition |
+| `mode` | Always `"real"` for this endpoint |
 
-The operation completes during the request. It does not start a background job,
-create an MLflow run, train a model, or change subsequent predictions.
+Training is synchronous: the response is returned after the operation finishes. No background job is created.
+
+The operation logs the following to MLflow:
+
+- Model type, training parameters, and dataset partition sizes.
+- Validation metrics.
+- Git commit and experiment metadata.
+- The complete fitted preprocessing and classifier pipeline.
+
+The returned `model_uri` identifies a logged model. It does not by itself indicate that a Model Registry version or champion alias has been created.
+
+Training does not automatically activate the new model for prediction. The `/predict` endpoint currently remains mock-based.
+
+### Operational requirements
+
+The operation requires:
+
+- The configured CSV file.
+- The project's Python dependencies.
+- An accessible MLflow tracking backend and writable artifact storage.
+
+The training code uses the `MLFLOW_TRACKING_URI` environment variable when set. Otherwise, it defaults to:
+
+```text
+http://127.0.0.1:5000
+```
+
+The request cannot override the MLflow tracking URI.
+
+### Operational errors
+
+The route explicitly handles the following failures:
+
+| Status | Detail |
+| --- | --- |
+| `503` | `The training dataset is unavailable.` |
+| `503` | `The MLflow operation could not be completed.` |
+| `500` | `Training failed because of invalid data or configuration.` |
+
+These responses contain a string-valued `detail` field:
+
+```json
+{
+  "detail": "The training dataset is unavailable."
+}
+```
+
+Unexpected failures may also result in HTTP `500`.
 
 ## Validation errors — 422 Unprocessable Entity
 
@@ -145,15 +233,14 @@ Examples include:
 
 - Missing required prediction fields.
 - A missing POST request body.
-- Unsupported product types or dataset identifiers.
+- Unsupported product types, dataset identifiers, or model types.
 - Values outside the allowed ranges.
-- Values that cannot be converted to the required types.
+- Values that cannot be converted to the required numeric types.
+- A `random_state` value other than the numeric literal `42`.
 - Additional fields not defined by the request schema.
+- Explicit null values.
 
-The response contains a `detail` list with information about each
-validation error.
-
-Typical error properties:
+The response contains a `detail` list with information about each validation error.
 
 | Property | Meaning |
 | --- | --- |
@@ -161,17 +248,24 @@ Typical error properties:
 | `type` | Validation error identifier |
 | `msg` | Human-readable explanation |
 
-Additional properties may be included. Clients should not depend on
-the exact wording of `msg`.
+Additional properties may be included. Clients should not depend on the exact wording of `msg`.
 
-## Mock scope and future integration
+Request validation takes place before the endpoint function runs. Invalid training requests do not start training.
 
-The current API requires no dataset, trained model, MLflow service,
-or persistent storage.
+## Current scope and remaining integration
 
-The request and response structures provide a starting point for real
-model integration. Before integration, the team must confirm the feature
-mapping, class meanings, preprocessing interface, and training behavior.
+The `/train` endpoint is connected to the real training pipeline.
 
-Any changes to the public API contract must also be reflected in the
-schemas, examples, tests, and this document.
+The `/predict` endpoint still returns fixed mock results. The following parts are not implemented yet:
+
+- Loading a model for real API predictions.
+- Returning predictions and probabilities calculated by that model.
+- Persistent prediction-request and result logging.
+- Prediction JSON/CSV artifact logging to MLflow.
+- Automatic model activation or Registry-based model selection.
+
+The `/health` endpoint checks API responsiveness only.
+
+API unit tests replace the training service with controlled test results. Passing those tests does not by itself demonstrate successful training against a running MLflow backend. Actual training and artifact retrieval require a separate integration check.
+
+Any changes to the public API contract must also be reflected in the schemas, examples, tests, and this document.

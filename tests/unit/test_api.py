@@ -1,6 +1,10 @@
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
+from mlflow.exceptions import MlflowException
 
+from predictive_maintenance.api import routes
 from predictive_maintenance.api.main import app
 
 client = TestClient(app)
@@ -17,6 +21,28 @@ def prediction_data() -> dict[str, str | float]:
         "tool_wear_min": 198.0,
     }
 
+
+@pytest.fixture(autouse=True)
+def mock_training(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Replace training during API tests to avoid external side effects."""
+    training = MagicMock(
+        return_value={
+            "run_id": "test-run-123",
+            "model_type": "gradient_boosting",
+            "model_uri": "models:/test-model",
+            "metrics": {
+                "accuracy": 0.95,
+                "precision": 0.80,
+                "recall": 0.75,
+                "f1": 0.77,
+                "roc_auc": 0.90,
+                "average_precision": 0.85,
+            },
+        }
+    )
+    monkeypatch.setattr(routes, "train_pipeline", training)
+    return training
+
 # TEST HEALTH ENDPOINT
 
 
@@ -24,10 +50,7 @@ def test_health_returns_ok() -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "mode": "mock",
-    }
+    assert response.json() == {"status": "ok"}
 
 # TEST PREDICT ENDPOINT
 
@@ -103,35 +126,43 @@ def test_predict_rejects_extra_field(
         for error in response.json()["detail"]
     )
 
+
 # TEST TRAIN ENDPOINT
+@pytest.mark.parametrize("model_type", ["gradient_boosting", "xgboost"])
+def test_train_returns_training_result(
+    model_type: str,
+    mock_training: MagicMock,
+) -> None:
+    mock_training.return_value["model_type"] = model_type
 
-
-def test_train_returns_mock_result() -> None:
     response = client.post(
         "/train",
         json={
             "dataset_id": "default",
+            "model_type": model_type,
             "random_state": 42,
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "status": "mock_completed",
-        "training_run_id": None,
-        "mode": "mock",
+        "status": "completed",
+        "training_run_id": "test-run-123",
+        "model_type": model_type,
+        "model_uri": "models:/test-model",
+        "metrics": mock_training.return_value["metrics"],
+        "mode": "real",
     }
+    mock_training.assert_called_once_with(model_type=model_type)
 
 
-def test_train_accepts_empty_object() -> None:
+def test_train_accepts_empty_object(mock_training: MagicMock) -> None:
     response = client.post("/train", json={})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "mock_completed",
-        "training_run_id": None,
-        "mode": "mock",
-    }
+    assert response.json()["status"] == "completed"
+    assert response.json()["model_type"] == "gradient_boosting"
+    mock_training.assert_called_once_with(model_type="gradient_boosting")
 
 
 def test_train_rejects_missing_body() -> None:
@@ -149,8 +180,10 @@ def test_train_rejects_missing_body() -> None:
     ("field", "invalid_value", "error_type"),
     [
         ("dataset_id", "unknown", "literal_error"),
-        ("random_state", -1, "greater_than_equal"),
-        ("random_state", "abc", "int_parsing"),
+        ("random_state", -1, "literal_error"),
+        ("random_state", 7, "literal_error"),
+        ("model_type", "unknown", "literal_error"),
+        ("random_state", "abc", "literal_error"),
     ],
 )
 def test_train_rejects_invalid_value(
@@ -190,3 +223,38 @@ def test_train_rejects_extra_field() -> None:
         and error["type"] == "extra_forbidden"
         for error in response.json()["detail"]
     )
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_status", "expected_detail"),
+    [
+        (
+            FileNotFoundError,
+            503,
+            "The training dataset is unavailable.",
+        ),
+        (
+            MlflowException,
+            503,
+            "The MLflow operation could not be completed.",
+        ),
+        (
+            ValueError,
+            500,
+            "Training failed because of invalid data or configuration.",
+        ),
+    ],
+)
+def test_train_handles_service_errors(
+    mock_training: MagicMock,
+    error_type: type[Exception],
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    mock_training.side_effect = error_type("Internal diagnostic details.")
+
+    response = client.post("/train", json={})
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    mock_training.assert_called_once_with(model_type="gradient_boosting")
