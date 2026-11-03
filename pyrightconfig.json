@@ -3,7 +3,8 @@
     "src",
     "tests",
     "infra",
-    "app"
+    "app",
+    "scripts"
   ],
   "exclude": [
     "**/.venv",
