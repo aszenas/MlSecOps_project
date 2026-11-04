@@ -6,6 +6,7 @@ from mlflow.exceptions import MlflowException
 
 from predictive_maintenance.api import routes
 from predictive_maintenance.api.main import app
+from predictive_maintenance.api.schemas import PredictionResponse
 
 client = TestClient(app)
 
@@ -43,6 +44,22 @@ def mock_training(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr(routes, "train_pipeline", training)
     return training
 
+
+@pytest.fixture(autouse=True)
+def mock_prediction(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Replace prediction during API tests without loading a real model."""
+    prediction = MagicMock(
+        return_value=PredictionResponse(
+            prediction=0,
+            probability=0.1,
+            model_version="m-test-model",
+            mode="real",
+        )
+    )
+    monkeypatch.setattr(routes, "predict_pipeline", prediction)
+    return prediction
+
+
 # TEST HEALTH ENDPOINT
 
 
@@ -55,8 +72,9 @@ def test_health_returns_ok() -> None:
 # TEST PREDICT ENDPOINT
 
 
-def test_predict_returns_mock_prediction(
+def test_predict_returns_prediction_result(
     prediction_data: dict[str, str | float],
+    mock_prediction: MagicMock,
 ) -> None:
     response = client.post("/predict", json=prediction_data)
 
@@ -64,9 +82,14 @@ def test_predict_returns_mock_prediction(
     assert response.json() == {
         "prediction": 0,
         "probability": 0.1,
-        "model_version": "mock-v1",
-        "mode": "mock",
+        "model_version": "m-test-model",
+        "mode": "real",
     }
+
+    mock_prediction.assert_called_once()
+    assert mock_prediction.call_args is not None
+    request = mock_prediction.call_args.args[0]
+    assert request.model_dump() == prediction_data
 
 
 def test_predict_rejects_missing_field(
@@ -100,6 +123,7 @@ def test_predict_rejects_invalid_value(
     prediction_data: dict[str, str | float],
     field: str,
     invalid_value: str | float,
+    mock_prediction: MagicMock,
 ) -> None:
     prediction_data[field] = invalid_value
 
@@ -110,6 +134,7 @@ def test_predict_rejects_invalid_value(
         error["loc"] == ["body", field]
         for error in response.json()["detail"]
     )
+    mock_prediction.assert_not_called()
 
 
 def test_predict_rejects_extra_field(
@@ -258,3 +283,44 @@ def test_train_handles_service_errors(
     assert response.status_code == expected_status
     assert response.json() == {"detail": expected_detail}
     mock_training.assert_called_once_with(model_type="gradient_boosting")
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_status", "expected_detail"),
+    [
+        (
+            RuntimeError,
+            503,
+            "The prediction model is unavailable.",
+        ),
+        (
+            OSError,
+            503,
+            "The prediction model is unavailable.",
+        ),
+        (
+            MlflowException,
+            503,
+            "The prediction model is unavailable.",
+        ),
+        (
+            ValueError,
+            500,
+            "Prediction failed because of invalid model data.",
+        ),
+    ],
+)
+def test_predict_handles_service_errors(
+    prediction_data: dict[str, str | float],
+    mock_prediction: MagicMock,
+    error_type: type[Exception],
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    mock_prediction.side_effect = error_type("Internal diagnostic details.")
+
+    response = client.post("/predict", json=prediction_data)
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    mock_prediction.assert_called_once()

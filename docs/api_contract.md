@@ -1,6 +1,6 @@
 # API Contract
 
-This document describes the current API: real model training with MLflow tracking and mock prediction.
+This document describes real model training with MLflow tracking and real prediction using a configured fitted pipeline.
 
 Base URL for local development: `http://127.0.0.1:8000`
 
@@ -23,7 +23,7 @@ Checks whether the API is responding. It does not check dataset availability, mo
 
 ## POST /predict
 
-Accepts one machine-data record and returns a fixed mock prediction.
+Accepts one machine-data record and returns a prediction calculated by the configured fitted preprocessing and classifier pipeline.
 
 ### Request fields
 
@@ -55,12 +55,14 @@ The numeric fields use Pydantic's default type conversion rather than strict typ
 
 ### Successful response — 200 OK
 
+The following response was observed locally for the example request using the indicated logged model. Other models or inputs can return different values.
+
 ```json
 {
   "prediction": 0,
-  "probability": 0.1,
-  "model_version": "mock-v1",
-  "mode": "mock"
+  "probability": 0.012770727629820311,
+  "model_version": "m-6215dba09ce64077bb59887734445acf",
+  "mode": "real"
 }
 ```
 
@@ -68,12 +70,41 @@ The numeric fields use Pydantic's default type conversion rather than strict typ
 | --- | --- |
 | `prediction` | `0`: no failure; `1`: failure |
 | `probability` | Probability of failure, between 0 and 1 |
-| `model_version` | Model identifier; currently `"mock-v1"` |
-| `mode` | Currently always `"mock"` for this endpoint |
+| `model_version` | Configured model URI with the `models:/` prefix removed; for logged-model URIs this is an `m-...` identifier, not a Registry version number |
+| `mode` | Always `"real"` for this endpoint |
 
-Every valid request currently returns the response shown above. The input is validated but is not used to calculate a prediction.
+### Prediction behavior and model configuration
 
-The returned probability is a fixed test value, not a real model estimate.
+The server reads `MODEL_URI` from its environment. This variable is required for prediction and must identify a trusted fitted sklearn Pipeline accessible through the configured MLflow backend. Clients cannot supply a model URI in the request.
+
+`MLFLOW_TRACKING_URI` selects the MLflow backend; its default is `http://127.0.0.1:5000`.
+
+The service builds a single-row DataFrame using the six normalized feature names in the model's expected order. The loaded pipeline performs preprocessing internally; it is not fitted again during prediction.
+
+The trained binary classifier uses class order `[0, 1]`. The service reads the positive-class probability from `predict_proba`, requires an output shape of `(1, 2)`, and rejects non-finite values or probabilities outside `[0, 1]`.
+
+The failure prediction is `1` when the failure probability is greater than or equal to `0.5`; otherwise it is `0`.
+
+The most recently loaded `(model_uri, tracking_uri)` pair is cached in memory per process. Repeated requests for that pair reuse the pipeline without reloading it from MLflow. The first load, a different pair, or an API process restart requires artifact access again. Changing `MODEL_URI` in a terminal does not update a running API process: set the variable and restart the API.
+
+Prediction does not load the training CSV. It uses the model and preprocessing already saved in MLflow. Running `/train` does not automatically update `MODEL_URI` or activate the newly trained model.
+
+### Operational errors
+
+| Status | Detail |
+| --- | --- |
+| `503` | `The prediction model is unavailable.` |
+| `500` | `Prediction failed because of invalid model data.` |
+
+The `503` handler covers the missing `MODEL_URI` configuration and handled MLflow, runtime, or operating-system failures. The `500` handler covers `ValueError`, including an incompatible loaded object or invalid probability output. These responses contain a string-valued `detail`, for example:
+
+```json
+{
+  "detail": "The prediction model is unavailable."
+}
+```
+
+Unexpected failures may also result in HTTP `500`.
 
 ## POST /train
 
@@ -187,7 +218,7 @@ The operation logs the following to MLflow:
 
 The returned `model_uri` identifies a logged model. It does not by itself indicate that a Model Registry version or champion alias has been created.
 
-Training does not automatically activate the new model for prediction. The `/predict` endpoint currently remains mock-based.
+Training does not automatically activate the new model for prediction. To use the returned model, configure its `model_uri` as the API process's `MODEL_URI` and restart the API.
 
 ### Operational requirements
 
@@ -250,22 +281,24 @@ The response contains a `detail` list with information about each validation err
 
 Additional properties may be included. Clients should not depend on the exact wording of `msg`.
 
-Request validation takes place before the endpoint function runs. Invalid training requests do not start training.
+Request validation takes place before the endpoint function runs. Invalid training requests do not start training; invalid prediction requests do not invoke the prediction service.
 
 ## Current scope and remaining integration
 
-The `/train` endpoint is connected to the real training pipeline.
+Both `/train` and `/predict` are connected to real services. Model loading and per-process caching are implemented. The retained mock service functions are not called by the current routes.
 
-The `/predict` endpoint still returns fixed mock results. The following parts are not implemented yet:
+The following parts are not implemented yet:
 
-- Loading a model for real API predictions.
-- Returning predictions and probabilities calculated by that model.
 - Persistent prediction-request and result logging.
 - Prediction JSON/CSV artifact logging to MLflow.
 - Automatic model activation or Registry-based model selection.
 
+The first two items remain part of Task 4.1. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
+
 The `/health` endpoint checks API responsiveness only.
 
-API unit tests replace the training service with controlled test results. Passing those tests does not by itself demonstrate successful training against a running MLflow backend. Actual training and artifact retrieval require a separate integration check.
+API unit tests replace training and prediction services with controlled results. Service tests exercise data preparation, model-loading/cache behavior, decision thresholds, missing configuration, and invalid model output while isolating external calls. They do not require the developer's running MLflow server.
+
+Separate local Swagger calls have demonstrated successful training, loading the saved pipeline, and a real prediction. These observations are not a claim that repository-wide coverage, CI, deployment, or the remaining logging requirements are complete.
 
 Any changes to the public API contract must also be reflected in the schemas, examples, tests, and this document.

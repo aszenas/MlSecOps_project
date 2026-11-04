@@ -1,14 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from mlflow.exceptions import MlflowException
 
-from predictive_maintenance.api.mock_service import mock_predict
+from predictive_maintenance.api.services import predict_pipeline, train_pipeline
 from predictive_maintenance.api.schemas import (
     PredictionRequest,
     PredictionResponse,
     TrainingRequest,
     TrainingResponse,
 )
-from predictive_maintenance.api.services import train_pipeline
 
 
 router = APIRouter()
@@ -21,7 +20,18 @@ def health() -> dict[str, str]:
 
 @router.post("/predict", response_model=PredictionResponse)
 def predict(data: PredictionRequest) -> PredictionResponse:
-    return mock_predict(data)
+    try:
+        return predict_pipeline(data)
+    except (MlflowException, RuntimeError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The prediction model is unavailable.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Prediction failed because of invalid model data.",
+        ) from exc
 
 
 @router.post("/train", response_model=TrainingResponse)
