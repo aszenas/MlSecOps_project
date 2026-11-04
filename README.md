@@ -150,6 +150,32 @@ The process caches the most recently loaded model/MLflow-URI pair.
 Training does not automatically change the prediction model. To switch
 models, update `MODEL_URI` and restart the API. Only configure trusted models.
 
+## Persistent prediction events
+
+Validated `/predict` requests now produce a committed SQLite event before a
+successful response is returned. The default storage path is
+`artifacts/predictions.db`, which is Git-ignored. The directory and table are
+created automatically on first use. Override the location in the API terminal
+before starting the server when needed:
+
+```powershell
+$env:PREDICTION_LOG_DB = "C:/path/to/predictions.db"
+```
+
+The `X-Request-ID` response header identifies the stored event. Events include
+a UTC timestamp, validated input features, model URI, threshold, status, and
+the prediction/probability/model identifier for successful requests. Handled
+prediction failures are stored with their public error message. Invalid `422`
+requests are rejected before this logging step. A storage failure returns
+`503` with `The prediction event could not be stored.` rather than reporting
+an unaudited prediction as successful.
+
+The JSON prediction response fields remain unchanged. Reusing the same database
+file preserves committed events across API restarts. Docker persistence will
+require mounting this path on persistent storage in Task 4.2. No pruning or
+retention policy is implemented yet. Prediction artifact export to MLflow is
+the next Task 4.1 step; local persistence alone does not perform that export.
+
 ## Available endpoints
 
 | Method | Path | Purpose |
@@ -169,7 +195,7 @@ The focused API and service tests do not require the real CSV, a configured
 results and temporary synthetic data.
 
 ```powershell
-python -m pytest tests/unit/test_api.py tests/unit/test_api_services.py -v
+python -m pytest tests/unit/test_api.py tests/unit/test_api_services.py tests/unit/test_prediction_store.py -v
 ```
 
 Run the complete test suite after making the original CSV available:
@@ -201,9 +227,10 @@ and a real prediction. Automated tests verify the API and service behavior
 with isolated data and controlled external calls; a passing unit test does
 not by itself establish end-to-end MLflow availability.
 
-Task 4.1 is not complete yet. Remaining work includes persistent prediction
-request/result logging, retrievable prediction JSON/CSV artifacts in MLflow,
-tests for those additions, and final repository-wide QA/coverage verification.
+Persistent prediction request/result storage and its tests are now implemented.
+Task 4.1 is not complete yet. Remaining work includes retrievable prediction
+JSON/CSV artifacts in MLflow, tests for that export, and final repository-wide
+QA/coverage verification.
 Model Registry activation, automated retraining, monitoring, and Docker
 deployment belong to later integration/infrastructure work.
 

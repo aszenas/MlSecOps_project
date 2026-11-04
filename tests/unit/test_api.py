@@ -1,4 +1,10 @@
+import json
+import sqlite3
+from contextlib import closing
+from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +15,22 @@ from predictive_maintenance.api.main import app
 from predictive_maintenance.api.schemas import PredictionResponse
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def prediction_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Use isolated storage for every API test."""
+    path = tmp_path / "predictions.db"
+    monkeypatch.setenv("PREDICTION_LOG_DB", str(path))
+    monkeypatch.setenv("MODEL_URI", "models:/m-test-model")
+    return path
+
+
+def read_prediction_events(path: Path) -> list[dict[str, object]]:
+    """Read committed events through a new connection."""
+    with closing(sqlite3.connect(path)) as connection:
+        rows = connection.execute("SELECT payload FROM prediction_events ORDER BY rowid").fetchall()
+    return [json.loads(row[0]) for row in rows]
 
 
 @pytest.fixture
@@ -75,6 +97,7 @@ def test_health_returns_ok() -> None:
 def test_predict_returns_prediction_result(
     prediction_data: dict[str, str | float],
     mock_prediction: MagicMock,
+    prediction_db: Path,
 ) -> None:
     response = client.post("/predict", json=prediction_data)
 
@@ -90,6 +113,25 @@ def test_predict_returns_prediction_result(
     assert mock_prediction.call_args is not None
     request = mock_prediction.call_args.args[0]
     assert request.model_dump() == prediction_data
+
+    request_id = response.headers["X-Request-ID"]
+    assert str(UUID(request_id)) == request_id
+    events = read_prediction_events(prediction_db)
+    assert len(events) == 1
+    event = events[0]
+    assert event["request_id"] == request_id
+    assert event["inputs"] == prediction_data
+    assert event["model_uri"] == "models:/m-test-model"
+    assert event["model_version"] == response.json()["model_version"]
+    assert event["prediction"] == response.json()["prediction"]
+    assert event["probability"] == response.json()["probability"]
+    assert event["decision_threshold"] == 0.5
+    assert event["status"] == "success"
+    assert event["http_status"] == 200
+    assert event["mode"] == "real"
+    timestamp = event["timestamp"]
+    assert isinstance(timestamp, str)
+    assert datetime.fromisoformat(timestamp).utcoffset() is not None
 
 
 def test_predict_rejects_missing_field(
@@ -124,6 +166,7 @@ def test_predict_rejects_invalid_value(
     field: str,
     invalid_value: str | float,
     mock_prediction: MagicMock,
+    prediction_db: Path,
 ) -> None:
     prediction_data[field] = invalid_value
 
@@ -135,6 +178,7 @@ def test_predict_rejects_invalid_value(
         for error in response.json()["detail"]
     )
     mock_prediction.assert_not_called()
+    assert not prediction_db.exists()
 
 
 def test_predict_rejects_extra_field(
@@ -313,6 +357,7 @@ def test_train_handles_service_errors(
 def test_predict_handles_service_errors(
     prediction_data: dict[str, str | float],
     mock_prediction: MagicMock,
+    prediction_db: Path,
     error_type: type[Exception],
     expected_status: int,
     expected_detail: str,
@@ -324,3 +369,61 @@ def test_predict_handles_service_errors(
     assert response.status_code == expected_status
     assert response.json() == {"detail": expected_detail}
     mock_prediction.assert_called_once()
+
+    events = read_prediction_events(prediction_db)
+    assert len(events) == 1
+    event = events[0]
+    assert event["request_id"] == response.headers["X-Request-ID"]
+    assert event["inputs"] == prediction_data
+    assert event["status"] == "error"
+    assert event["http_status"] == expected_status
+    assert event["error"] == expected_detail
+    assert "Internal diagnostic details" not in json.dumps(event)
+
+
+@pytest.mark.parametrize("error_type", [OSError, sqlite3.OperationalError, ValueError])
+def test_predict_reports_event_storage_failure(
+    prediction_data: dict[str, str | float],
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    storage = MagicMock(side_effect=error_type("Internal storage details."))
+    monkeypatch.setattr(routes, "save_prediction_event", storage)
+
+    response = client.post("/predict", json=prediction_data)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "The prediction event could not be stored."}
+    assert response.headers["X-Request-ID"]
+    storage.assert_called_once()
+
+
+def test_predict_persists_multiple_requests(
+    prediction_data: dict[str, str | float],
+    prediction_db: Path,
+) -> None:
+    first = client.post("/predict", json=prediction_data)
+    second = client.post("/predict", json=prediction_data)
+
+    assert first.status_code == second.status_code == 200
+    assert first.headers["X-Request-ID"] != second.headers["X-Request-ID"]
+    events = read_prediction_events(prediction_db)
+    assert {event["request_id"] for event in events} == {
+        first.headers["X-Request-ID"],
+        second.headers["X-Request-ID"],
+    }
+
+
+def test_predict_uses_default_event_storage(
+    prediction_data: dict[str, str | float],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PREDICTION_LOG_DB")
+    monkeypatch.setattr(routes, "PROJECT_ROOT", tmp_path)
+
+    response = client.post("/predict", json=prediction_data)
+
+    assert response.status_code == 200
+    events = read_prediction_events(tmp_path / "artifacts" / "predictions.db")
+    assert events[0]["request_id"] == response.headers["X-Request-ID"]

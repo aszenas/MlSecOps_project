@@ -95,6 +95,7 @@ Prediction does not load the training CSV. It uses the model and preprocessing a
 | --- | --- |
 | `503` | `The prediction model is unavailable.` |
 | `500` | `Prediction failed because of invalid model data.` |
+| `503` | `The prediction event could not be stored.` |
 
 The `503` handler covers the missing `MODEL_URI` configuration and handled MLflow, runtime, or operating-system failures. The `500` handler covers `ValueError`, including an incompatible loaded object or invalid probability output. These responses contain a string-valued `detail`, for example:
 
@@ -105,6 +106,44 @@ The `503` handler covers the missing `MODEL_URI` configuration and handled MLflo
 ```
 
 Unexpected failures may also result in HTTP `500`.
+
+### Persistent prediction events
+
+Each request that passes input validation receives a server-generated UUID.
+For successful predictions and handled prediction failures, the API commits
+an event to a local SQLite database and returns the UUID in the `X-Request-ID`
+response header. The JSON response schema is unchanged.
+
+The event is stored in `prediction_events`, with `request_id` as the unique
+primary key and `payload` containing JSON. Event fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `request_id` | UUID matching the response header |
+| `timestamp` | Request processing start time in UTC ISO 8601 format |
+| `inputs` | The six validated request features |
+| `model_uri` | Configured model URI, or null when configuration is missing |
+| `decision_threshold` | `0.5` |
+| `status` | `success` or `error` |
+| `http_status` | Intended prediction status: `200`, `503`, or `500` |
+| `prediction`, `probability`, `model_version`, `mode` | Successful prediction result fields |
+| `error` | Public error message for a handled prediction failure |
+
+Internal exception messages and stack traces are not stored in these events.
+Requests rejected with `422` do not reach this logging step. Unhandled failures
+are not covered by this event logger.
+
+`PREDICTION_LOG_DB` configures the SQLite file. Its default is the repository's
+`artifacts/predictions.db`; the parent directory and table are created on demand.
+Committed events remain available when the API restarts with the same file.
+The generated database must not be committed to Git. Container deployments
+must put it on persistent storage to survive container replacement.
+
+If the event cannot be committed, the API returns `503` with
+`The prediction event could not be stored.` and an `X-Request-ID` header.
+This also takes precedence if persistence fails while recording a handled
+prediction error. No event can be guaranteed in a storage-failure case.
+There is no automatic retry, retention policy, or MLflow prediction export yet.
 
 ## POST /train
 
@@ -289,11 +328,10 @@ Both `/train` and `/predict` are connected to real services. Model loading and p
 
 The following parts are not implemented yet:
 
-- Persistent prediction-request and result logging.
 - Prediction JSON/CSV artifact logging to MLflow.
 - Automatic model activation or Registry-based model selection.
 
-The first two items remain part of Task 4.1. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
+Persistent local prediction logging is implemented. Prediction JSON/CSV artifact export remains part of Task 4.1. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
 
 The `/health` endpoint checks API responsiveness only.
 
