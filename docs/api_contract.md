@@ -143,7 +143,55 @@ If the event cannot be committed, the API returns `503` with
 `The prediction event could not be stored.` and an `X-Request-ID` header.
 This also takes precedence if persistence fails while recording a handled
 prediction error. No event can be guaranteed in a storage-failure case.
-There is no automatic retry, retention policy, or MLflow prediction export yet.
+There is no automatic retry or retention policy. A separate command exports persisted events to MLflow as described below.
+
+## Prediction artifact export (command-line operation)
+
+`python scripts/export_predictions.py` exports a snapshot of persisted events
+to the `predictive-maintenance-predictions` MLflow experiment. Run from the
+repository root with `PYTHONPATH=src`. This is not an HTTP endpoint and is not
+automatically executed by `/predict`.
+
+| Option | Behavior |
+| --- | --- |
+| `--database PATH` | Override `PREDICTION_LOG_DB` / the default `artifacts/predictions.db` |
+| `--tracking-uri URI` | Override `MLFLOW_TRACKING_URI` / the default `http://127.0.0.1:5000` |
+| `--all` | Explicitly create a historical snapshot, including already uploaded events |
+| `--model-uri URI` | Select the exact stored `model_uri` |
+| `--since TIMESTAMP` | Inclusive event timestamp boundary, with timezone |
+| `--until TIMESTAMP` | Exclusive event timestamp boundary, with timezone |
+
+Default mode selects events not included in a completed incremental batch for
+the same tracking URI string. Both success and error events are eligible.
+Historical snapshots never remove events or alter incremental eligibility.
+No matching events means no remote run and output `{"status": "no_matching_events"}`.
+
+Each non-empty batch stores an immutable JSON snapshot and unique `batch_id`
+in SQLite before contacting MLflow. Its artifact path is
+`predictions/predictions.json`. The document contains `schema_version`,
+`batch_id`, `created_at`, `selection`, `event_count`, and an `events` array.
+The original event fields are preserved, including `request_id`.
+
+Successful output includes `run_id` and a downloadable URI in the form
+`runs:/<run-id>/predictions/predictions.json`. The run has `operation=predict`
+and `batch_id` tags, an event count, model URI information, and an export mode.
+Any previous artifact remains independently downloadable from MLflow UI.
+
+Incremental bookkeeping is completed only after artifact upload and remote
+run completion. Failures leave the local batch pending. Retrying the same
+selection reuses its snapshot, batch ID, remote run, and artifact path.
+Remote runs can also be recovered by batch tag if creation succeeded before
+the run ID was saved locally. A finished remote run allows local recovery
+without repeating its upload. This is recovery coordination between two
+stores, not a distributed atomic transaction.
+
+An unfinished selection must be retried before changing filters for the same
+destination. Multiple remote runs with the same batch tag are reported as an
+error rather than silently selected. Exporters are serialized using a separate
+local SQLite lock file; event writes remain possible during upload. CLI errors
+produce a nonzero exit status. No scheduler, pruning, or deletion is performed.
+
+See the README for command examples and restart/retry instructions.
 
 ## POST /train
 
@@ -328,15 +376,14 @@ Both `/train` and `/predict` are connected to real services. Model loading and p
 
 The following parts are not implemented yet:
 
-- Prediction JSON/CSV artifact logging to MLflow.
 - Automatic model activation or Registry-based model selection.
 
-Persistent local prediction logging is implemented. Prediction JSON/CSV artifact export remains part of Task 4.1. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
+Persistent local prediction logging and JSON prediction artifact export are implemented. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
 
 The `/health` endpoint checks API responsiveness only.
 
 API unit tests replace training and prediction services with controlled results. Service tests exercise data preparation, model-loading/cache behavior, decision thresholds, missing configuration, and invalid model output while isolating external calls. They do not require the developer's running MLflow server.
 
-Separate local Swagger calls have demonstrated successful training, loading the saved pipeline, and a real prediction. These observations are not a claim that repository-wide coverage, CI, deployment, or the remaining logging requirements are complete.
+Separate local Swagger calls have demonstrated successful training, loading the saved pipeline, and a real prediction. Automated MLflow integration tests additionally upload and download prediction artifacts using isolated storage. These checks do not establish remote CI or deployment status; review the latest quality-check results before merging.
 
 Any changes to the public API contract must also be reflected in the schemas, examples, tests, and this document.
