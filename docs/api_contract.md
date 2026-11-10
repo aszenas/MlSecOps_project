@@ -386,4 +386,5 @@ API unit tests replace training and prediction services with controlled results.
 
 Separate local Swagger calls have demonstrated successful training, loading the saved pipeline, and a real prediction. Automated MLflow integration tests additionally upload and download prediction artifacts using isolated storage. These checks do not establish remote CI or deployment status; review the latest quality-check results before merging.
 
-Any changes to the public API contract must also be reflected in the schemas, examples, tests, and this document.
+Any changes to the public API contract must also be reflected in the
+schemas, examples, tests, and this document.
