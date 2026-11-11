@@ -104,6 +104,7 @@ def test_training_registers_and_promotes(
         registered_model_name="predictive-maintenance-model",
         minimum_recall=0.70,
         threshold=0.5,
+        apply_promotion=False,
     )
 
     client = workflow_setup["MlflowClient"].return_value

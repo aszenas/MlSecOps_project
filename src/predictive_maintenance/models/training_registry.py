@@ -106,6 +106,7 @@ def train_register_and_select(
             registered_model_name=registered_model_name,
             minimum_recall=minimum_recall,
             threshold=threshold,
+            apply_promotion=False,
         )
     except Exception:
         client.set_model_version_tag(

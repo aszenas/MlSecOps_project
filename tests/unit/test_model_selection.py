@@ -305,3 +305,59 @@ def test_selection_rejects_invalid_minimum_recall(
             y_validation=y,
             minimum_recall=minimum_recall,
         )
+
+
+def test_selection_dry_run_does_not_change_champion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recommend promotion without changing the Registry alias."""
+    client = MagicMock()
+    client.get_registered_model.return_value.aliases = {
+        "champion": "1"
+    }
+
+    monkeypatch.setattr(
+        model_selection,
+        "MlflowClient",
+        MagicMock(return_value=client),
+    )
+
+    monkeypatch.setattr(
+        model_selection,
+        "_load_registered_version",
+        MagicMock(return_value=Pipeline(steps=[])),
+    )
+
+    evaluator = MagicMock(
+        side_effect=[
+            {"f1": 0.85, "recall": 0.80},
+            {"f1": 0.70, "recall": 0.75},
+        ]
+    )
+    monkeypatch.setattr(
+        model_selection,
+        "evaluate_model",
+        evaluator,
+    )
+
+    promoter = MagicMock()
+    monkeypatch.setattr(
+        model_selection,
+        "set_champion_version",
+        promoter,
+    )
+
+    result = model_selection.evaluate_and_select_champion(
+        challenger_version="2",
+        X_validation=pd.DataFrame({"feature": [1, 2]}),
+        y_validation=pd.Series([0, 1]),
+        apply_promotion=False,
+    )
+
+    assert result.promoted is True
+    assert result.reason == "higher_f1"
+    assert result.champion_version_before == "1"
+    assert result.selected_version == "2"
+
+    promoter.assert_not_called()
+    assert evaluator.call_count == 2

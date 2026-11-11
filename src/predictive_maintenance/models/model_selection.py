@@ -87,6 +87,7 @@ def evaluate_and_select_champion(
     registered_model_name: str = REGISTERED_MODEL_NAME,
     minimum_recall: float = MINIMUM_RECALL,
     threshold: float = 0.5,
+    apply_promotion: bool = True,
 ) -> SelectionResult:
     """Compare registered versions and promote only a better challenger."""
     if not registered_model_name.strip():
@@ -150,7 +151,7 @@ def evaluate_and_select_champion(
     else:
         reason = "f1_not_improved"
 
-    if promoted:
+    if promoted and apply_promotion:
         set_champion_version(
             challenger_version,
             registered_model_name,
