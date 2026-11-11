@@ -3,6 +3,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from sklearn.dummy import DummyClassifier
 
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
@@ -299,3 +300,149 @@ def test_champion_alias_switches_between_model_versions(
         REGISTERED_MODEL_NAME,
         version_two,
     ) is not None
+
+
+def test_automatic_champion_selection_with_real_registry(
+    isolated_registry: str,
+    training_data: tuple[pd.DataFrame, pd.Series],
+) -> None:
+    """Promote better models and reject candidates below recall guardrail."""
+    from predictive_maintenance.models.model_selection import (
+        evaluate_and_select_champion,
+    )
+
+    features, target = training_data
+
+    experiment = mlflow.get_experiment_by_name(
+        "registry-integration-test"
+    )
+    assert experiment is not None
+
+    def log_and_register(
+        model: Pipeline,
+        labels: pd.Series,
+        artifact_name: str,
+    ) -> str:
+        """Train and register a model in the isolated MLflow store."""
+        model.fit(features, labels)
+
+        with mlflow.start_run(
+            experiment_id=experiment.experiment_id,
+        ):
+            model_info = mlflow_sklearn.log_model(
+                sk_model=model,
+                name=artifact_name,
+                input_example=features.head(2),
+                serialization_format="cloudpickle",
+            )
+
+        return register_model(model_info.model_uri)
+
+    # v1: Baseline that predicts failure for every machine.
+    baseline = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                DummyClassifier(
+                    strategy="constant",
+                    constant=1,
+                ),
+            ),
+        ]
+    )
+
+    version_one = log_and_register(
+        baseline,
+        target,
+        "baseline-candidate",
+    )
+
+    set_champion_version(version_one)
+
+    # v2: Better classifier trained on the correct labels.
+    improved = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(random_state=42),
+            ),
+        ]
+    )
+
+    version_two = log_and_register(
+        improved,
+        target,
+        "improved-candidate",
+    )
+
+    result = evaluate_and_select_champion(
+        challenger_version=version_two,
+        X_validation=features,
+        y_validation=target,
+    )
+
+    assert result.promoted is True
+    assert result.reason == "higher_f1"
+    assert result.champion_version_before == version_one
+    assert result.selected_version == version_two
+    assert result.champion_metrics is not None
+
+    assert (
+        result.challenger_metrics["f1"]
+        > result.champion_metrics["f1"]
+    )
+    assert result.challenger_metrics["recall"] >= 0.70
+
+    assert get_champion_version() == version_two
+
+    # v3: A model trained with reversed labels.
+    reversed_labels = 1 - target
+
+    poor_candidate = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(random_state=42),
+            ),
+        ]
+    )
+
+    version_three = log_and_register(
+        poor_candidate,
+        reversed_labels,
+        "poor-candidate",
+    )
+
+    rejected = evaluate_and_select_champion(
+        challenger_version=version_three,
+        X_validation=features,
+        y_validation=target,
+    )
+
+    assert rejected.promoted is False
+    assert rejected.reason == "recall_below_minimum"
+    assert rejected.challenger_metrics["recall"] < 0.70
+    assert rejected.selected_version == version_two
+
+    # The better model remains champion.
+    assert get_champion_version() == version_two
+
+    client = MlflowClient(tracking_uri=isolated_registry)
+
+    champion = client.get_model_version_by_alias(
+        name=REGISTERED_MODEL_NAME,
+        alias=CHAMPION_ALIAS,
+    )
+
+    assert str(champion.version) == version_two
+
+    # All three registered versions remain accessible.
+    for version in (version_one, version_two, version_three):
+        stored_version = client.get_model_version(
+            name=REGISTERED_MODEL_NAME,
+            version=version,
+        )
+        assert str(stored_version.version) == version
