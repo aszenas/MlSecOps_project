@@ -370,21 +370,40 @@ def test_invalid_threshold_blocks_training(
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        ({"registered_model_name": " "}, "Registered model name"),
-        ({"tracking_uri": " "}, "Tracking URI"),
-    ],
+    "registered_model_name",
+    ["", " "],
 )
-def test_blank_configuration_blocks_training(
+def test_blank_model_name_blocks_training(
     isolated_workflow: dict[str, MagicMock],
     validation_splits: MagicMock,
-    kwargs: dict[str, str],
-    message: str,
+    registered_model_name: str,
 ) -> None:
-    """Fail fast for empty model names or explicit tracking URIs."""
-    with pytest.raises(ValueError, match=message):
+    """Reject blank registered model names before training."""
+    with pytest.raises(ValueError, match="Registered model name"):
         training_registry.train_register_and_select(
-            validation_splits, "xgboost", **kwargs
+            validation_splits,
+            "xgboost",
+            registered_model_name=registered_model_name,
         )
+
+    isolated_workflow["run_training_experiment"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "tracking_uri",
+    ["", " "],
+)
+def test_blank_tracking_uri_blocks_training(
+    isolated_workflow: dict[str, MagicMock],
+    validation_splits: MagicMock,
+    tracking_uri: str,
+) -> None:
+    """Reject blank explicit tracking URIs before training."""
+    with pytest.raises(ValueError, match="Tracking URI"):
+        training_registry.train_register_and_select(
+            validation_splits,
+            "xgboost",
+            tracking_uri=tracking_uri,
+        )
+
     isolated_workflow["run_training_experiment"].assert_not_called()
