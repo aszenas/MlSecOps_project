@@ -273,6 +273,8 @@ def test_champion_alias_switches_between_model_versions(
         f"models:/{REGISTERED_MODEL_NAME}/{version_one}"
     )
 
+    assert isinstance(old_model, Pipeline)
+
     np.testing.assert_array_equal(
         old_model.predict(features),
         first_model.predict(features),
