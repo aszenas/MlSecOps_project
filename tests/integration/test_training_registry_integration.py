@@ -1,4 +1,6 @@
-"""End-to-end tests for training and MLflow Registry orchestration."""
+"""End-to-end tests for training, MLflow Registry and lineage."""
+
+import json
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -14,6 +16,7 @@ from predictive_maintenance.data.splitting import (
     DataSplits,
     create_initial_data_splits,
 )
+from predictive_maintenance.models.data_lineage import DatasetLineage
 from predictive_maintenance.models.mlflow_tracking import EXPERIMENT_NAME
 from predictive_maintenance.models.model_registry import (
     CHAMPION_ALIAS,
@@ -219,3 +222,45 @@ def test_retraining_does_not_promote_equal_model(
         alias=CHAMPION_ALIAS,
     )
     assert str(alias.version) == "1"
+
+
+def test_training_registry_persists_dataset_lineage(
+    isolated_mlflow: str,
+    synthetic_splits: DataSplits,
+) -> None:
+    """Record a real JSON artifact and searchable dataset tags."""
+    lineage = DatasetLineage(
+        dataset_name="predictive_maintenance_5000",
+        dvc_hash="aabbccddee123456",
+        git_commit="1234567890abcdef",
+        split_version="initial-seed-42",
+    )
+    result = train_register_and_select(
+        splits=synthetic_splits,
+        model_type="gradient_boosting",
+        tracking_uri=isolated_mlflow,
+        dataset_lineage=lineage,
+    )
+    client = MlflowClient(
+        tracking_uri=isolated_mlflow,
+        registry_uri=isolated_mlflow,
+    )
+    run = client.get_run(result.run_id)
+    assert run.data.tags["dataset_name"] == lineage.dataset_name
+    assert run.data.tags["dataset_dvc_hash"] == lineage.dvc_hash
+    assert run.data.tags["dataset_git_commit"] == lineage.git_commit
+    artifact_path = client.download_artifacts(
+        result.run_id, "lineage/dataset_metadata.json"
+    )
+    with open(artifact_path, encoding="utf-8") as artifact:
+        stored = json.load(artifact)
+    assert stored["dataset_name"] == lineage.dataset_name
+    assert stored["dvc_hash"] == lineage.dvc_hash
+    assert stored["split_rows"] == {
+        "train": len(synthetic_splits.X_train),
+        "validation": len(synthetic_splits.X_validation),
+        "future": len(synthetic_splits.X_future),
+        "test": len(synthetic_splits.X_test),
+    }
+    assert run.data.tags["promotion_status"] == "completed"
+    assert get_champion_version() == result.registered_version
