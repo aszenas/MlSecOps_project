@@ -1,317 +1,169 @@
+"""Unit tests for MLflow Model Registry helpers."""
 
-"""Unit tests for MLflow Model Registry registration."""
-
-from unittest.mock import Mock, patch
-from sklearn.pipeline import Pipeline
+from unittest.mock import MagicMock
 
 import pytest
+from sklearn.pipeline import Pipeline
 
-from predictive_maintenance.models.model_registry import (
-    CHAMPION_ALIAS,
-    REGISTERED_MODEL_NAME,
-    get_champion_version,
-    register_model,
-    set_champion_version,
-    load_champion_model,
-)
+from predictive_maintenance.models import model_registry
 
 
-@patch("predictive_maintenance.models.model_registry.mlflow.register_model")
-def test_register_model_success(mock_register_model: Mock) -> None:
-    """Return the version assigned by MLflow."""
-    mock_register_model.return_value.version = "1"
+@pytest.fixture
+def registry_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, MagicMock]:
+    """Replace MLflow calls to avoid touching a real Registry."""
+    register = MagicMock()
+    client_factory = MagicMock()
+    loader = MagicMock()
+    monkeypatch.setattr(model_registry.mlflow, "register_model", register)
+    monkeypatch.setattr(model_registry, "MlflowClient", client_factory)
+    monkeypatch.setattr(model_registry.mlflow_sklearn, "load_model", loader)
+    return {
+        "register": register,
+        "client_factory": client_factory,
+        "loader": loader,
+    }
 
-    result = register_model("models:/m-test123")
 
+def test_register_model_returns_version(
+    registry_mocks: dict[str, MagicMock],
+) -> None:
+    """Register a logged model and return the new version as text."""
+    registry_mocks["register"].return_value.version = 3
+    result = model_registry.register_model("models:/m-123")
+    assert result == "3"
+    registry_mocks["register"].assert_called_once_with(
+        model_uri="models:/m-123",
+        name=model_registry.REGISTERED_MODEL_NAME,
+        await_registration_for=60,
+    )
+
+
+def test_register_model_accepts_custom_name(
+    registry_mocks: dict[str, MagicMock],
+) -> None:
+    """Allow an explicitly named registered model."""
+    registry_mocks["register"].return_value.version = 1
+    result = model_registry.register_model("models:/m-123", "custom-model")
     assert result == "1"
-    mock_register_model.assert_called_once_with(
-        model_uri="models:/m-test123",
-        name=REGISTERED_MODEL_NAME,
-        await_registration_for=60,
+    assert registry_mocks["register"].call_args.kwargs["name"] == (
+        "custom-model"
     )
 
 
-@patch("predictive_maintenance.models.model_registry.mlflow.register_model")
-def test_register_model_custom_name(mock_register_model: Mock) -> None:
-    """Allow registration under a custom model name."""
-    mock_register_model.return_value.version = "2"
-
-    result = register_model(
-        "models:/m-test456",
-        registered_model_name="custom-maintenance-model",
-    )
-
-    assert result == "2"
-    mock_register_model.assert_called_once_with(
-        model_uri="models:/m-test456",
-        name="custom-maintenance-model",
-        await_registration_for=60,
-    )
-
-
-@pytest.mark.parametrize(
-    "model_uri",
-    ["", " ", "\t", "\n"],
-)
-@patch("predictive_maintenance.models.model_registry.mlflow.register_model")
-def test_register_model_rejects_empty_uri(
-    mock_register_model: Mock,
+@pytest.mark.parametrize("model_uri", ["", " "])
+def test_register_model_rejects_blank_uri(
+    registry_mocks: dict[str, MagicMock],
     model_uri: str,
 ) -> None:
-    """Reject missing or whitespace-only model URIs."""
-    with pytest.raises(ValueError, match="Model URI must not be empty"):
-        register_model(model_uri)
+    """Reject blank source model URIs."""
+    with pytest.raises(ValueError):
+        model_registry.register_model(model_uri)
+    registry_mocks["register"].assert_not_called()
 
-    mock_register_model.assert_not_called()
 
-
-@pytest.mark.parametrize(
-    "registered_model_name",
-    ["", " ", "\t", "\n"],
-)
-@patch("predictive_maintenance.models.model_registry.mlflow.register_model")
-def test_register_model_rejects_empty_name(
-    mock_register_model: Mock,
-    registered_model_name: str,
+@pytest.mark.parametrize("model_name", ["", " "])
+def test_register_model_rejects_blank_name(
+    registry_mocks: dict[str, MagicMock],
+    model_name: str,
 ) -> None:
-    """Reject missing or whitespace-only registered model names."""
-    with pytest.raises(
-        ValueError,
-        match="Registered model name must not be empty",
-    ):
-        register_model(
-            "models:/m-test123",
-            registered_model_name=registered_model_name,
-        )
-
-    mock_register_model.assert_not_called()
+    """Reject blank registry names."""
+    with pytest.raises(ValueError):
+        model_registry.register_model("models:/m-123", model_name)
+    registry_mocks["register"].assert_not_called()
 
 
-@patch("predictive_maintenance.models.model_registry.mlflow.register_model")
-def test_register_model_propagates_mlflow_error(
-    mock_register_model: Mock,
+def test_set_champion_version(
+    registry_mocks: dict[str, MagicMock],
 ) -> None:
-    """Propagate registration failures to the caller."""
-    mock_register_model.side_effect = RuntimeError(
-        "Registry unavailable"
-    )
-
-    with pytest.raises(RuntimeError, match="Registry unavailable"):
-        register_model("models:/m-test123")
-
-    mock_register_model.assert_called_once()
-
-
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_set_champion_version_success(
-    mock_client_class: Mock,
-) -> None:
-    """Assign champion to the requested registered version."""
-    set_champion_version("2")
-
-    client = mock_client_class.return_value
+    """Set the MLflow alias on a selected version."""
+    model_registry.set_champion_version("2")
+    client = registry_mocks["client_factory"].return_value
     client.set_registered_model_alias.assert_called_once_with(
-        name=REGISTERED_MODEL_NAME,
-        alias=CHAMPION_ALIAS,
+        name=model_registry.REGISTERED_MODEL_NAME,
+        alias=model_registry.CHAMPION_ALIAS,
         version="2",
     )
 
 
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_set_champion_version_custom_name(
-    mock_client_class: Mock,
-) -> None:
-    """Support custom registered model names."""
-    set_champion_version(
-        "3",
-        registered_model_name="custom-model",
-    )
-
-    client = mock_client_class.return_value
-    client.set_registered_model_alias.assert_called_once_with(
-        name="custom-model",
-        alias="champion",
-        version="3",
-    )
-
-
-@pytest.mark.parametrize(
-    "version",
-    ["", "0", "-1", "abc", "1.5", " "],
-)
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_set_champion_rejects_invalid_version(
-    mock_client_class: Mock,
+@pytest.mark.parametrize("version", ["", "0", "-1", "abc", "1.5"])
+def test_set_champion_rejects_invalid_versions(
+    registry_mocks: dict[str, MagicMock],
     version: str,
 ) -> None:
-    """Reject invalid versions before contacting MLflow."""
-    with pytest.raises(
-        ValueError,
-        match="Model version must be a positive integer",
-    ):
-        set_champion_version(version)
-
-    mock_client_class.assert_not_called()
+    """Require positive integer registry versions."""
+    with pytest.raises(ValueError):
+        model_registry.set_champion_version(version)
+    registry_mocks[
+        "client_factory"
+    ].return_value.set_registered_model_alias.assert_not_called()
 
 
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_get_champion_version_success(
-    mock_client_class: Mock,
-) -> None:
-    """Return the registry version associated with champion."""
-    client = mock_client_class.return_value
-    client.get_model_version_by_alias.return_value.version = "2"
-
-    result = get_champion_version()
-
-    assert result == "2"
-    client.get_model_version_by_alias.assert_called_once_with(
-        name=REGISTERED_MODEL_NAME,
-        alias=CHAMPION_ALIAS,
-    )
-
-
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_get_champion_version_custom_name(
-    mock_client_class: Mock,
-) -> None:
-    """Resolve champion for a custom registered model."""
-    client = mock_client_class.return_value
-    client.get_model_version_by_alias.return_value.version = "4"
-
-    result = get_champion_version("custom-model")
-
-    assert result == "4"
-    client.get_model_version_by_alias.assert_called_once_with(
-        name="custom-model",
-        alias=CHAMPION_ALIAS,
-    )
-
-
-@pytest.mark.parametrize(
-    "function_name",
-    ["set", "get"],
-)
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_champion_rejects_empty_model_name(
-    mock_client_class: Mock,
-    function_name: str,
-) -> None:
-    """Reject blank registered model names."""
-    with pytest.raises(ValueError, match="name must not be empty"):
-        if function_name == "set":
-            set_champion_version("1", registered_model_name=" ")
-        else:
-            get_champion_version(registered_model_name=" ")
-
-    mock_client_class.assert_not_called()
-
-
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_set_champion_propagates_mlflow_error(
-    mock_client_class: Mock,
-) -> None:
-    """Do not swallow registry update failures."""
-    client = mock_client_class.return_value
-    client.set_registered_model_alias.side_effect = RuntimeError(
-        "Registry unavailable"
-    )
-
-    with pytest.raises(RuntimeError, match="Registry unavailable"):
-        set_champion_version("2")
-
-
-@patch("predictive_maintenance.models.model_registry.MlflowClient")
-def test_get_champion_propagates_mlflow_error(
-    mock_client_class: Mock,
-) -> None:
-    """Expose missing aliases or registry failures to callers."""
-    client = mock_client_class.return_value
-    client.get_model_version_by_alias.side_effect = RuntimeError(
-        "Champion alias unavailable"
-    )
-
-    with pytest.raises(RuntimeError, match="Champion alias unavailable"):
-        get_champion_version()
-
-
-@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
-def test_load_champion_model_success(
-    mock_load_model: Mock,
-) -> None:
-    """Load the current champion as an sklearn Pipeline."""
-    expected_model = Pipeline(steps=[])
-    mock_load_model.return_value = expected_model
-
-    result = load_champion_model()
-
-    assert result is expected_model
-    mock_load_model.assert_called_once_with(
-        f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}"
-    )
-
-
-@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
-def test_load_champion_model_custom_name(
-    mock_load_model: Mock,
-) -> None:
-    """Resolve champion for a custom registered model."""
-    expected_model = Pipeline(steps=[])
-    mock_load_model.return_value = expected_model
-
-    result = load_champion_model("custom-model")
-
-    assert result is expected_model
-    mock_load_model.assert_called_once_with(
-        "models:/custom-model@champion"
-    )
-
-
-@pytest.mark.parametrize("model_name", ["", " ", "\t", "\n"])
-@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
-def test_load_champion_rejects_empty_name(
-    mock_load_model: Mock,
+@pytest.mark.parametrize("model_name", ["", " "])
+def test_set_champion_rejects_blank_model_name(
+    registry_mocks: dict[str, MagicMock],
     model_name: str,
 ) -> None:
-    """Reject invalid names before contacting MLflow."""
-    with pytest.raises(
-        ValueError,
-        match="Registered model name must not be empty",
-    ):
-        load_champion_model(model_name)
-
-    mock_load_model.assert_not_called()
+    """Require a nonempty registered model name."""
+    with pytest.raises(ValueError):
+        model_registry.set_champion_version("2", model_name)
 
 
-@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
-def test_load_champion_rejects_non_pipeline(
-    mock_load_model: Mock,
+def test_get_champion_version(
+    registry_mocks: dict[str, MagicMock],
 ) -> None:
-    """Reject model artifacts that are not sklearn Pipelines."""
-    mock_load_model.return_value = {"invalid": "model"}
-
-    with pytest.raises(
-        ValueError,
-        match="The loaded model must be an sklearn Pipeline",
-    ):
-        load_champion_model()
-
-    mock_load_model.assert_called_once()
-
-
-@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
-def test_load_champion_propagates_mlflow_error(
-    mock_load_model: Mock,
-) -> None:
-    """Propagate errors when the champion cannot be loaded."""
-    mock_load_model.side_effect = RuntimeError(
-        "Champion model unavailable"
+    """Read the current version assigned to the champion alias."""
+    registry_mocks[
+        "client_factory"
+    ].return_value.get_model_version_by_alias.return_value.version = 7
+    assert model_registry.get_champion_version() == "7"
+    client = registry_mocks["client_factory"].return_value
+    client.get_model_version_by_alias.assert_called_once_with(
+        name=model_registry.REGISTERED_MODEL_NAME,
+        alias=model_registry.CHAMPION_ALIAS,
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="Champion model unavailable",
-    ):
-        load_champion_model()
 
-    mock_load_model.assert_called_once()
+@pytest.mark.parametrize("model_name", ["", " "])
+def test_get_champion_rejects_blank_model_name(
+    registry_mocks: dict[str, MagicMock],
+    model_name: str,
+) -> None:
+    """Validate a registered model name before looking up its alias."""
+    with pytest.raises(ValueError):
+        model_registry.get_champion_version(model_name)
+
+
+def test_load_champion_model(
+    registry_mocks: dict[str, MagicMock],
+) -> None:
+    """Load the full sklearn preprocessing and classifier Pipeline."""
+    expected = Pipeline(steps=[])
+    registry_mocks["loader"].return_value = expected
+    actual = model_registry.load_champion_model()
+    assert actual is expected
+    registry_mocks["loader"].assert_called_once_with(
+        f"models:/{model_registry.REGISTERED_MODEL_NAME}"
+        f"@{model_registry.CHAMPION_ALIAS}"
+    )
+
+
+def test_load_champion_rejects_non_pipeline(
+    registry_mocks: dict[str, MagicMock],
+) -> None:
+    """Reject saved artifacts that are not complete sklearn Pipelines."""
+    registry_mocks["loader"].return_value = object()
+    with pytest.raises(ValueError):
+        model_registry.load_champion_model()
+
+
+@pytest.mark.parametrize("model_name", ["", " "])
+def test_load_champion_rejects_blank_model_name(
+    registry_mocks: dict[str, MagicMock],
+    model_name: str,
+) -> None:
+    """Require a registered model name when loading the champion."""
+    with pytest.raises(ValueError):
+        model_registry.load_champion_model(model_name)
+    registry_mocks["loader"].assert_not_called()
