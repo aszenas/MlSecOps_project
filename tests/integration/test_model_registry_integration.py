@@ -177,3 +177,123 @@ def test_registry_lifecycle_and_artifact_persistence(
         restored_model.predict_proba(features),
         expected_probabilities,
     )
+
+
+def test_champion_alias_switches_between_model_versions(
+    isolated_registry: str,
+    training_data: tuple[pd.DataFrame, pd.Series],
+) -> None:
+    """Verify champion promotion and preservation of older versions."""
+    features, target = training_data
+
+    experiment = mlflow.get_experiment_by_name(
+        "registry-integration-test"
+    )
+    assert experiment is not None
+
+    def train_and_register(
+        labels: pd.Series,
+        model_name: str,
+    ) -> tuple[str, Pipeline]:
+        """Train, log and register one model candidate."""
+        model = Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                (
+                    "classifier",
+                    LogisticRegression(random_state=42),
+                ),
+            ]
+        )
+        model.fit(features, labels)
+
+        with mlflow.start_run(
+            experiment_id=experiment.experiment_id
+        ):
+            model_info = mlflow_sklearn.log_model(
+                sk_model=model,
+                name=model_name,
+                input_example=features.head(2),
+                serialization_format="cloudpickle",
+            )
+
+        version = register_model(model_info.model_uri)
+        return version, model
+
+    # Register the initial candidate.
+    version_one, first_model = train_and_register(
+        target,
+        "candidate-v1",
+    )
+
+    set_champion_version(version_one)
+
+    assert get_champion_version() == version_one
+
+    first_champion = load_champion_model()
+
+    np.testing.assert_array_equal(
+        first_champion.predict(features),
+        first_model.predict(features),
+    )
+
+    # Train a second, intentionally different candidate.
+    reversed_target = 1 - target
+
+    version_two, second_model = train_and_register(
+        reversed_target,
+        "candidate-v2",
+    )
+
+    assert int(version_two) == int(version_one) + 1
+
+    # Registration must not automatically change champion.
+    assert get_champion_version() == version_one
+
+    # Explicitly promote the second registered version.
+    set_champion_version(version_two)
+
+    assert get_champion_version() == version_two
+
+    second_champion = load_champion_model()
+
+    np.testing.assert_array_equal(
+        second_champion.predict(features),
+        second_model.predict(features),
+    )
+
+    # Verify that switching actually changes the predictions.
+    assert not np.array_equal(
+        first_champion.predict(features),
+        second_champion.predict(features),
+    )
+
+    # The previous model version must remain accessible.
+    old_model = mlflow_sklearn.load_model(
+        f"models:/{REGISTERED_MODEL_NAME}/{version_one}"
+    )
+
+    np.testing.assert_array_equal(
+        old_model.predict(features),
+        first_model.predict(features),
+    )
+
+    # Check that the registry reflects the new champion.
+    client = MlflowClient(tracking_uri=isolated_registry)
+
+    champion = client.get_model_version_by_alias(
+        name=REGISTERED_MODEL_NAME,
+        alias=CHAMPION_ALIAS,
+    )
+
+    assert str(champion.version) == version_two
+
+    assert client.get_model_version(
+        REGISTERED_MODEL_NAME,
+        version_one,
+    ) is not None
+
+    assert client.get_model_version(
+        REGISTERED_MODEL_NAME,
+        version_two,
+    ) is not None
