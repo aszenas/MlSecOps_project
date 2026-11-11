@@ -1,10 +1,12 @@
 
-"""Register logged MLflow models in the Model Registry."""
+"""Register and manage MLflow Model Registry versions."""
 
 import mlflow
+from mlflow import MlflowClient
 
 
 REGISTERED_MODEL_NAME = "predictive-maintenance-model"
+CHAMPION_ALIAS = "champion"
 
 
 def register_model(
@@ -22,6 +24,41 @@ def register_model(
         model_uri=model_uri,
         name=registered_model_name,
         await_registration_for=60,
+    )
+
+    return str(model_version.version)
+
+
+def set_champion_version(
+    version: str,
+    registered_model_name: str = REGISTERED_MODEL_NAME,
+) -> None:
+    """Assign the champion alias to a registered model version."""
+    if not registered_model_name or not registered_model_name.strip():
+        raise ValueError("Registered model name must not be empty.")
+
+    if not version or not version.isdecimal() or int(version) < 1:
+        raise ValueError("Model version must be a positive integer.")
+
+    client = MlflowClient()
+    client.set_registered_model_alias(
+        name=registered_model_name,
+        alias=CHAMPION_ALIAS,
+        version=version,
+    )
+
+
+def get_champion_version(
+    registered_model_name: str = REGISTERED_MODEL_NAME,
+) -> str:
+    """Return the model version currently assigned to champion."""
+    if not registered_model_name or not registered_model_name.strip():
+        raise ValueError("Registered model name must not be empty.")
+
+    client = MlflowClient()
+    model_version = client.get_model_version_by_alias(
+        name=registered_model_name,
+        alias=CHAMPION_ALIAS,
     )
 
     return str(model_version.version)
