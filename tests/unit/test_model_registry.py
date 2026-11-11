@@ -2,6 +2,7 @@
 """Unit tests for MLflow Model Registry registration."""
 
 from unittest.mock import Mock, patch
+from sklearn.pipeline import Pipeline
 
 import pytest
 
@@ -11,6 +12,7 @@ from predictive_maintenance.models.model_registry import (
     get_champion_version,
     register_model,
     set_champion_version,
+    load_champion_model,
 )
 
 
@@ -231,3 +233,85 @@ def test_get_champion_propagates_mlflow_error(
 
     with pytest.raises(RuntimeError, match="Champion alias unavailable"):
         get_champion_version()
+
+
+@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
+def test_load_champion_model_success(
+    mock_load_model: Mock,
+) -> None:
+    """Load the current champion as an sklearn Pipeline."""
+    expected_model = Pipeline(steps=[])
+    mock_load_model.return_value = expected_model
+
+    result = load_champion_model()
+
+    assert result is expected_model
+    mock_load_model.assert_called_once_with(
+        f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}"
+    )
+
+
+@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
+def test_load_champion_model_custom_name(
+    mock_load_model: Mock,
+) -> None:
+    """Resolve champion for a custom registered model."""
+    expected_model = Pipeline(steps=[])
+    mock_load_model.return_value = expected_model
+
+    result = load_champion_model("custom-model")
+
+    assert result is expected_model
+    mock_load_model.assert_called_once_with(
+        "models:/custom-model@champion"
+    )
+
+
+@pytest.mark.parametrize("model_name", ["", " ", "\t", "\n"])
+@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
+def test_load_champion_rejects_empty_name(
+    mock_load_model: Mock,
+    model_name: str,
+) -> None:
+    """Reject invalid names before contacting MLflow."""
+    with pytest.raises(
+        ValueError,
+        match="Registered model name must not be empty",
+    ):
+        load_champion_model(model_name)
+
+    mock_load_model.assert_not_called()
+
+
+@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
+def test_load_champion_rejects_non_pipeline(
+    mock_load_model: Mock,
+) -> None:
+    """Reject model artifacts that are not sklearn Pipelines."""
+    mock_load_model.return_value = {"invalid": "model"}
+
+    with pytest.raises(
+        ValueError,
+        match="The loaded model must be an sklearn Pipeline",
+    ):
+        load_champion_model()
+
+    mock_load_model.assert_called_once()
+
+
+@patch("predictive_maintenance.models.model_registry.mlflow_sklearn.load_model")
+def test_load_champion_propagates_mlflow_error(
+    mock_load_model: Mock,
+) -> None:
+    """Propagate errors when the champion cannot be loaded."""
+    mock_load_model.side_effect = RuntimeError(
+        "Champion model unavailable"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Champion model unavailable",
+    ):
+        load_champion_model()
+
+    mock_load_model.assert_called_once()
