@@ -98,7 +98,7 @@ def test_registry_lifecycle_and_artifact_persistence(
     )
     assert experiment is not None
 
-    with mlflow.start_run(experiment_id=experiment.experiment_id):
+    with mlflow.start_run(experiment_id=experiment.experiment_id) as run:
         mlflow.log_param("model_type", "logistic_regression")
         mlflow.log_metric("validation_f1", 1.0)
 
@@ -109,7 +109,7 @@ def test_registry_lifecycle_and_artifact_persistence(
             serialization_format="cloudpickle",
         )
 
-        source_run_id = mlflow.active_run().info.run_id
+        source_run_id = run.info.run_id
 
     assert model_info.model_uri.startswith("models:/")
 
