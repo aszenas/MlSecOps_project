@@ -3,6 +3,8 @@
 
 import mlflow
 from mlflow import MlflowClient
+import mlflow.sklearn as mlflow_sklearn
+from sklearn.pipeline import Pipeline
 
 
 REGISTERED_MODEL_NAME = "predictive-maintenance-model"
@@ -62,3 +64,24 @@ def get_champion_version(
     )
 
     return str(model_version.version)
+
+
+def load_champion_model(
+    registered_model_name: str = REGISTERED_MODEL_NAME,
+) -> Pipeline:
+    """Load the current champion as a complete sklearn pipeline."""
+    if not registered_model_name or not registered_model_name.strip():
+        raise ValueError("Registered model name must not be empty.")
+
+    model_uri = (
+        f"models:/{registered_model_name}@{CHAMPION_ALIAS}"
+    )
+
+    model = mlflow_sklearn.load_model(model_uri)
+
+    if not isinstance(model, Pipeline):
+        raise ValueError(
+            "The loaded model must be an sklearn Pipeline."
+        )
+
+    return model
