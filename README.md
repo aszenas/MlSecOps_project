@@ -389,3 +389,8 @@ see the [API contract](docs/api_contract.md).
 
 For Evidently report generation, drift rules, outputs, and validation,
 see the [monitoring documentation](docs/monitoring.md).
+
+## Docker
+
+For API image build, startup, health checks, and cleanup,
+see the [Docker instructions](docs/docker.md).
