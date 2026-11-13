@@ -1,9 +1,12 @@
 """End-to-end tests for training, MLflow Registry and lineage."""
 
-import json
-
 from collections.abc import Iterator
+import hashlib
+import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import mlflow
 import numpy as np
@@ -12,11 +15,17 @@ import pytest
 from mlflow import MlflowClient
 from sklearn.pipeline import Pipeline
 
+from predictive_maintenance.data.loader import load_raw_data
+from predictive_maintenance.data.preprocessing import DataProcessor
+from predictive_maintenance.data.provenance import verify_dvc_dataset
+from predictive_maintenance.data.split_manifest import build_split_manifest
 from predictive_maintenance.data.splitting import (
     DataSplits,
     create_initial_data_splits,
 )
 from predictive_maintenance.models.data_lineage import DatasetLineage
+from predictive_maintenance.models.dvc_lineage import INITIAL_SPLIT_VERSION
+from predictive_maintenance.models.dvc_training import train_from_dvc
 from predictive_maintenance.models.mlflow_tracking import EXPERIMENT_NAME
 from predictive_maintenance.models.model_registry import (
     CHAMPION_ALIAS,
@@ -264,3 +273,164 @@ def test_training_registry_persists_dataset_lineage(
     }
     assert run.data.tags["promotion_status"] == "completed"
     assert get_champion_version() == result.registered_version
+
+
+def run_repository_command(repository: Path, *command: str) -> str:
+    """Run a checked command inside an isolated test repository."""
+    result = subprocess.run(
+        list(command),
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=90,
+    )
+    return result.stdout.strip()
+
+
+@pytest.fixture
+def versioned_dvc_repository(tmp_path: Path) -> tuple[Path, str]:
+    """Restore real data from a local remote into a fresh Git clone."""
+    project_root = Path(__file__).resolve().parents[2]
+    seed = tmp_path / "seed"
+    workspace = tmp_path / "workspace"
+    remote = tmp_path / "dvc-remote"
+    seed.mkdir()
+    remote.mkdir()
+
+    shutil.copytree(
+        project_root / "src",
+        seed / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copy2(project_root / "requirements.txt", seed / "requirements.txt")
+    raw_directory = seed / "data" / "raw"
+    raw_directory.mkdir(parents=True)
+    shutil.copy2(
+        project_root / "data/raw/predictive_maintenance_5000.csv",
+        raw_directory / "predictive_maintenance_5000.csv",
+    )
+    (seed / ".gitignore").write_text(
+        "__pycache__/\n*.pyc\n",
+        encoding="utf-8",
+    )
+
+    run_repository_command(seed, "git", "init")
+    run_repository_command(seed, "git", "config", "user.name", "Integration Test")
+    run_repository_command(
+        seed, "git", "config", "user.email", "integration@example.invalid"
+    )
+    run_repository_command(seed, "git", "config", "commit.gpgsign", "false")
+    run_repository_command(
+        seed, "git", "config", "core.hooksPath", str(tmp_path / "empty-hooks")
+    )
+    run_repository_command(seed, sys.executable, "-m", "dvc", "init")
+    run_repository_command(seed, sys.executable, "-m", "dvc", "add", "data/raw")
+    run_repository_command(
+        seed, sys.executable, "-m", "dvc",
+        "remote", "add", "-d", "test-local", str(remote),
+    )
+    run_repository_command(
+        seed, sys.executable, "-m", "dvc", "push", "data/raw.dvc"
+    )
+    run_repository_command(seed, "git", "add", ".")
+    run_repository_command(
+        seed, "git", "commit", "-m", "Record isolated training fixture"
+    )
+    commit = run_repository_command(seed, "git", "rev-parse", "HEAD")
+
+    run_repository_command(
+        tmp_path, "git", "clone", str(seed), str(workspace)
+    )
+    dataset = workspace / "data/raw/predictive_maintenance_5000.csv"
+    assert not dataset.exists()
+
+    run_repository_command(
+        workspace, sys.executable, "-m", "dvc", "pull", "data/raw.dvc"
+    )
+    assert dataset.is_file()
+    assert run_repository_command(
+        workspace, "git", "status", "--porcelain"
+    ) == ""
+
+    return workspace, commit
+
+
+def test_dvc_training_persists_verified_provenance(
+    isolated_mlflow: str,
+    versioned_dvc_repository: tuple[Path, str],
+) -> None:
+    """Preserve actual Git/DVC references and exact split membership."""
+    repository, expected_commit = versioned_dvc_repository
+    expected_dvc_hash = verify_dvc_dataset(repository)
+
+    result = train_from_dvc(
+        repository,
+        tracking_uri=isolated_mlflow,
+    )
+    client = MlflowClient(
+        tracking_uri=isolated_mlflow,
+        registry_uri=isolated_mlflow,
+    )
+    run = client.get_run(result.run_id)
+
+    metadata_path = client.download_artifacts(
+        result.run_id, "lineage/dataset_metadata.json"
+    )
+    manifest_path = client.download_artifacts(
+        result.run_id, "lineage/split_manifest.json"
+    )
+    metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+
+    assert metadata["git_commit"] == expected_commit
+    assert metadata["dvc_hash"] == expected_dvc_hash
+    assert metadata["split_version"] == INITIAL_SPLIT_VERSION
+    assert run.data.tags["dataset_git_commit"] == expected_commit
+    assert run.data.tags["dataset_dvc_hash"] == expected_dvc_hash
+
+    processor = DataProcessor()
+    raw = load_raw_data(
+        repository / "data/raw/predictive_maintenance_5000.csv"
+    )
+    features, target = processor.split_features_target(
+        processor.rename_columns(raw)
+    )
+    splits = create_initial_data_splits(features, target)
+    assert manifest == build_split_manifest(splits)
+    assert metadata["split_rows"] == {
+        "train": 3000,
+        "validation": 750,
+        "future": 750,
+        "test": 500,
+    }
+
+    serialized = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    assert run.data.tags["dataset_split_manifest_sha256"] == digest
+
+    version = client.get_model_version(
+        REGISTERED_MODEL_NAME, result.registered_version
+    )
+    assert version.tags["training_run_id"] == result.run_id
+
+
+def test_modified_dvc_dataset_prevents_training(
+    isolated_mlflow: str,
+    versioned_dvc_repository: tuple[Path, str],
+) -> None:
+    """Reject changed data before creating any MLflow training run."""
+    repository, _ = versioned_dvc_repository
+    dataset = repository / "data/raw/predictive_maintenance_5000.csv"
+    original = dataset.read_bytes()
+    dataset.write_bytes(original + b"\n")
+
+    with pytest.raises(ValueError, match="differs from the recorded state"):
+        train_from_dvc(repository, tracking_uri=isolated_mlflow)
+
+    client = MlflowClient(tracking_uri=isolated_mlflow)
+    experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
+    assert experiment is not None
+    assert not client.search_runs([experiment.experiment_id])
