@@ -1,9 +1,12 @@
 """Record reproducible dataset provenance for MLflow training runs."""
 
 from dataclasses import asdict, dataclass
+import hashlib
+import json
 
 from mlflow import MlflowClient
 
+from predictive_maintenance.data.split_manifest import build_split_manifest
 from predictive_maintenance.data.splitting import DataSplits
 
 
@@ -53,3 +56,24 @@ def log_dataset_lineage(
         client.set_tag(run_id, "dataset_git_commit", lineage.git_commit)
     if lineage.split_version is not None:
         client.set_tag(run_id, "dataset_split_version", lineage.split_version)
+
+
+def log_split_manifest(
+    client: MlflowClient,
+    run_id: str,
+    splits: DataSplits,
+) -> str:
+    """Log exact partition membership and return its SHA-256 identifier."""
+    manifest = build_split_manifest(splits)
+    serialized = json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    # Store the artifact before advertising its identifier.
+    client.log_dict(run_id, manifest, "lineage/split_manifest.json")
+    client.set_tag(run_id, "dataset_split_manifest_sha256", digest)
+    return digest
