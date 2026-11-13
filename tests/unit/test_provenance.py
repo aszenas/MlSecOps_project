@@ -9,6 +9,7 @@ import pytest
 from predictive_maintenance.data.provenance import (
     read_clean_git_commit,
     read_dvc_directory_hash,
+    verify_dvc_dataset,
 )
 
 
@@ -126,3 +127,93 @@ def test_rejects_invalid_dvc_metadata(
 
     with pytest.raises(ValueError):
         read_dvc_directory_hash(tmp_path)
+
+
+def prepare_dvc_dataset(repository_root: Path) -> None:
+    write_dvc_metadata(
+        repository_root,
+        f"outs:\n- path: raw\n  hash: md5\n  md5: {DIRECTORY_HASH}\n",
+    )
+    raw_directory = repository_root / "data" / "raw"
+    raw_directory.mkdir()
+    (raw_directory / "predictive_maintenance_5000.csv").write_text(
+        "example\n1\n",
+        encoding="utf-8",
+    )
+
+
+def test_verifies_clean_dvc_dataset(tmp_path: Path) -> None:
+    prepare_dvc_dataset(tmp_path)
+
+    with patch(
+        "predictive_maintenance.data.provenance.subprocess.run",
+        return_value=git_result("{}"),
+    ) as run:
+        assert verify_dvc_dataset(tmp_path) == DIRECTORY_HASH
+
+    command = run.call_args.args[0]
+    assert command[1:] == [
+        "-m", "dvc", "status", "data/raw.dvc", "--json",
+    ]
+    assert run.call_args.kwargs["cwd"] == tmp_path
+    assert run.call_args.kwargs["timeout"] == 60
+
+
+def test_rejects_missing_dataset(tmp_path: Path) -> None:
+    prepare_dvc_dataset(tmp_path)
+    dataset = tmp_path / "data" / "raw" / "predictive_maintenance_5000.csv"
+    dataset.unlink()
+
+    with patch(
+        "predictive_maintenance.data.provenance.subprocess.run",
+    ) as run:
+        with pytest.raises(ValueError, match="dataset is missing"):
+            verify_dvc_dataset(tmp_path)
+
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        '{"data/raw.dvc": [{"changed outs": {"data/raw": "modified"}}]}',
+        "[]",
+        "null",
+        "",
+        "not-json",
+    ],
+)
+def test_rejects_unverified_dvc_status(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    prepare_dvc_dataset(tmp_path)
+
+    with patch(
+        "predictive_maintenance.data.provenance.subprocess.run",
+        return_value=git_result(status),
+    ):
+        with pytest.raises(ValueError):
+            verify_dvc_dataset(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("python"),
+        subprocess.CalledProcessError(1, ["python", "-m", "dvc"]),
+        subprocess.TimeoutExpired(["python", "-m", "dvc"], 60),
+    ],
+)
+def test_reports_dvc_execution_failure(
+    tmp_path: Path,
+    error: Exception,
+) -> None:
+    prepare_dvc_dataset(tmp_path)
+
+    with patch(
+        "predictive_maintenance.data.provenance.subprocess.run",
+        side_effect=error,
+    ):
+        with pytest.raises(RuntimeError, match="verify the DVC dataset"):
+            verify_dvc_dataset(tmp_path)

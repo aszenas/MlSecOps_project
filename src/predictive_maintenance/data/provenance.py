@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import subprocess
 import yaml
+import json
+import sys
 
 
 def _run_git(repository_root: Path, *arguments: str) -> str:
@@ -77,5 +79,49 @@ def read_dvc_directory_hash(repository_root: Path) -> str:
         or re.fullmatch(r"[0-9a-f]{32}\.dir", directory_hash) is None
     ):
         raise ValueError("Invalid DVC directory hash.")
+
+    return directory_hash
+
+
+def verify_dvc_dataset(repository_root: Path) -> str:
+    """Return the DVC hash only when the local dataset is available and clean."""
+    directory_hash = read_dvc_directory_hash(repository_root)
+    dataset_path = (
+        repository_root / "data" / "raw" / "predictive_maintenance_5000.csv"
+    )
+    if not dataset_path.is_file():
+        raise ValueError("The DVC dataset is missing. Run dvc pull first.")
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "dvc",
+                "status",
+                "data/raw.dvc",
+                "--json",
+            ],
+            cwd=repository_root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("Could not verify the DVC dataset.") from exc
+
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("DVC returned invalid status JSON.") from exc
+
+    if not isinstance(status, dict):
+        raise ValueError("DVC status must be a mapping.")
+
+    if status:
+        raise ValueError(
+            "The local DVC dataset or cache differs from the recorded state."
+        )
 
     return directory_hash
