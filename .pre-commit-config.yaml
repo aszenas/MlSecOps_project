@@ -3,18 +3,25 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        entry: python -m pre_commit_hooks.trailing_whitespace_fixer
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
+        entry: python -m pre_commit_hooks.end_of_file_fixer
       - id: check-yaml
+        entry: python -m pre_commit_hooks.check_yaml
+
       - id: check-merge-conflict
+        entry: python -m pre_commit_hooks.check_merge_conflict
+
       - id: check-added-large-files
+        entry: python -m pre_commit_hooks.check_added_large_files
         args: [--maxkb=1024]
 
   - repo: local
     hooks:
       - id: flake8
         name: Flake8
-        entry: flake8
+        entry: python -m flake8
         language: python
         additional_dependencies:
           - flake8==7.5.0
