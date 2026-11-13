@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from predictive_maintenance.data.provenance import read_clean_git_commit
+from predictive_maintenance.data.provenance import (
+    read_clean_git_commit,
+    read_dvc_directory_hash,
+)
 
 
 COMMIT = "a" * 40
@@ -75,3 +78,51 @@ def test_reports_git_execution_failure(
     ):
         with pytest.raises(RuntimeError, match="Git provenance"):
             read_clean_git_commit(tmp_path)
+
+
+DIRECTORY_HASH = "b" * 32 + ".dir"
+
+
+def write_dvc_metadata(repository_root: Path, content: str) -> None:
+    metadata_path = repository_root / "data" / "raw.dvc"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(content, encoding="utf-8")
+
+
+def test_reads_dvc_directory_hash(tmp_path: Path) -> None:
+    write_dvc_metadata(
+        tmp_path,
+        f"outs:\n- path: raw\n  hash: md5\n  md5: {DIRECTORY_HASH}\n",
+    )
+
+    assert read_dvc_directory_hash(tmp_path) == DIRECTORY_HASH
+
+
+def test_reports_missing_dvc_metadata(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Could not read"):
+        read_dvc_directory_hash(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "[]",
+        "outs: []",
+        "outs: [null]",
+        "outs: [{}, {}]",
+        "outs: [",
+        "outs:\n- path: processed\n  hash: md5\n  md5: " + DIRECTORY_HASH,
+        "outs:\n- path: raw\n  hash: sha256\n  md5: " + DIRECTORY_HASH,
+        "outs:\n- path: raw\n  hash: md5\n  md5: invalid",
+        "outs:\n- path: raw\n  hash: md5\n  md5: 123",
+    ],
+)
+def test_rejects_invalid_dvc_metadata(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    write_dvc_metadata(tmp_path, content)
+
+    with pytest.raises(ValueError):
+        read_dvc_directory_hash(tmp_path)
