@@ -8,10 +8,6 @@ import mlflow
 from mlflow import MlflowClient
 
 from predictive_maintenance.data.splitting import DataSplits
-from predictive_maintenance.models.data_lineage import (
-    DatasetLineage,
-    log_dataset_lineage,
-)
 from predictive_maintenance.models.mlflow_tracking import (
     run_training_experiment,
 )
@@ -27,6 +23,11 @@ from predictive_maintenance.models.model_selection import (
     evaluate_and_select_champion,
 )
 from predictive_maintenance.models.training import ModelType
+from predictive_maintenance.models.data_lineage import (
+    DatasetLineage,
+    log_dataset_lineage,
+    log_split_manifest,
+)
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ def train_register_and_select(
     minimum_recall: float = MINIMUM_RECALL,
     threshold: float = 0.5,
     dataset_lineage: DatasetLineage | None = None,
+    record_split_manifest: bool = False,
 ) -> TrainingRegistryResult:
     """Train, register, audit and conditionally promote a model."""
     if not registered_model_name.strip():
@@ -200,6 +202,9 @@ def train_register_and_select(
     # Log data provenance before any champion selection or promotion.
     if dataset_lineage is not None:
         log_dataset_lineage(client, run_id, splits, dataset_lineage)
+
+    if record_split_manifest:
+        log_split_manifest(client, run_id, splits)
 
     try:
         selection = evaluate_and_select_champion(

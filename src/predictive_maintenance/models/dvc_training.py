@@ -55,4 +55,5 @@ def train_from_dvc(
         model_type=model_type,
         tracking_uri=tracking_uri,
         dataset_lineage=lineage,
+        record_split_manifest=True,
     )

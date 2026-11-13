@@ -65,6 +65,7 @@ def test_passes_verified_lineage_to_training(
         dataset_lineage=dependencies[
             "build_initial_dataset_lineage"
         ].return_value,
+        record_split_manifest=True,
     )
     assert dependencies[
         "create_initial_data_splits"
