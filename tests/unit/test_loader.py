@@ -161,3 +161,24 @@ def test_loader_rejects_non_string_product_id(
     invalid["Product ID"] = [101, 102, 103]
     with pytest.raises(ValueError, match="Product ID.*strings"):
         validate_raw_data(invalid)
+
+
+def test_loader_handles_csv_read_error(
+    tmp_path,
+    valid_raw_data: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Convert CSV reading failures into a descriptive ValueError."""
+    csv_path = tmp_path / "unreadable.csv"
+    valid_raw_data.to_csv(csv_path, index=False)
+
+    def raise_parser_error(*args: object, **kwargs: object) -> None:
+        raise pd.errors.ParserError("Simulated CSV parsing failure")
+
+    monkeypatch.setattr(pd, "read_csv", raise_parser_error)
+
+    with pytest.raises(
+        ValueError,
+        match="Unable to read CSV file",
+    ):
+        load_raw_data(csv_path)

@@ -131,3 +131,36 @@ def test_evaluate_rejects_invalid_probabilities(evaluation_data):
             X,
             y,
         )
+
+
+@pytest.mark.parametrize(
+    "invalid_probability",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ],
+)
+def test_evaluate_rejects_non_finite_probabilities(
+    evaluation_data,
+    invalid_probability,
+):
+    """Reject NaN and infinite prediction probabilities."""
+    X, y, _ = evaluation_data
+
+    probabilities = [
+        [0.9, 0.1],
+        [0.6, invalid_probability],
+        [0.3, 0.7],
+        [0.2, 0.8],
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="Predicted probabilities must be finite",
+    ):
+        evaluate_model(
+            make_model(probabilities),
+            X,
+            y,
+        )
