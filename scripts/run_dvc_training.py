@@ -29,12 +29,19 @@ def main() -> None:
         required=True,
         help="Explicit MLflow backend URI for this training run.",
     )
+    parser.add_argument(
+        "--dataset-version",
+        choices=["v1", "v2"],
+        default="v1",
+        help="Training dataset version (default: v1).",
+    )
     arguments = parser.parse_args()
 
     result = train_from_dvc(
         repository_root=arguments.repository_root.resolve(),
         model_type=arguments.model_type,
         tracking_uri=arguments.tracking_uri,
+        dataset_version=arguments.dataset_version,
     )
     print(json.dumps(asdict(result), indent=2, allow_nan=False))
 
