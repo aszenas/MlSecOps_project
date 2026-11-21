@@ -394,3 +394,7 @@ see the [monitoring documentation](docs/monitoring.md).
 
 For verified dataset versions, reproducible training commands and split
 manifests, see the [DVC–MLflow integration guide](docs/dvc_mlflow_lineage.md).
+## Docker
+
+For API image build, startup, health checks, and cleanup,
+see the [Docker instructions](docs/docker.md).
