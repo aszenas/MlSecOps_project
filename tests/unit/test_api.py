@@ -74,7 +74,7 @@ def mock_prediction(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         return_value=PredictionResponse(
             prediction=0,
             probability=0.1,
-            model_version="m-test-model",
+            model_version="1",
             mode="real",
         )
     )
@@ -105,7 +105,7 @@ def test_predict_returns_prediction_result(
     assert response.json() == {
         "prediction": 0,
         "probability": 0.1,
-        "model_version": "m-test-model",
+        "model_version": "1",
         "mode": "real",
     }
 
@@ -121,7 +121,9 @@ def test_predict_returns_prediction_result(
     event = events[0]
     assert event["request_id"] == request_id
     assert event["inputs"] == prediction_data
-    assert event["model_uri"] == "models:/m-test-model"
+    assert event["model_uri"] == "models:/predictive-maintenance-model/1"
+    assert event["registered_model_name"] == "predictive-maintenance-model"
+    assert event["model_alias"] == "models:/predictive-maintenance-model@champion"
     assert event["model_version"] == response.json()["model_version"]
     assert event["prediction"] == response.json()["prediction"]
     assert event["probability"] == response.json()["probability"]
@@ -396,6 +398,7 @@ def test_predict_handles_service_errors(
     assert event["inputs"] == prediction_data
     assert event["status"] == "error"
     assert event["http_status"] == expected_status
+    assert event["model_uri"] is None
     assert event["error"] == expected_detail
     assert "Internal diagnostic details" not in json.dumps(event)
 

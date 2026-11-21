@@ -9,6 +9,7 @@ from mlflow.exceptions import MlflowException
 
 from predictive_maintenance.api.services import PROJECT_ROOT, predict_pipeline, train_pipeline
 from predictive_maintenance.monitoring.prediction_store import save_prediction_event
+from predictive_maintenance.models.model_registry import REGISTERED_MODEL_NAME, CHAMPION_ALIAS
 from predictive_maintenance.api.schemas import (
     PredictionRequest,
     PredictionResponse,
@@ -46,7 +47,9 @@ def predict(data: PredictionRequest, response: Response) -> PredictionResponse:
     event: dict[str, object] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "inputs": data.model_dump(),
-        "model_uri": os.environ.get("MODEL_URI"),
+        "registered_model_name": REGISTERED_MODEL_NAME,
+        "model_alias": f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}",
+        "model_uri": None,
         "decision_threshold": 0.5,
     }
     try:
@@ -73,6 +76,7 @@ def predict(data: PredictionRequest, response: Response) -> PredictionResponse:
     event.update(
         status="success",
         http_status=200,
+        model_uri=f"models:/{REGISTERED_MODEL_NAME}/{result.model_version}",
         prediction=result.prediction,
         probability=result.probability,
         model_version=result.model_version,
