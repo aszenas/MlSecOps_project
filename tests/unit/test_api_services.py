@@ -53,6 +53,70 @@ def clear_model_cache() -> Iterator[None]:
     clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def isolate_server_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the developer's server settings out of service tests."""
+    monkeypatch.delenv("TRAINING_REPOSITORY_ROOT", raising=False)
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+
+
+def test_training_repository_defaults_to_project_root() -> None:
+    assert services.get_training_repository_root() == services.PROJECT_ROOT
+
+
+def test_training_repository_reads_current_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_project_root = services.PROJECT_ROOT
+    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(tmp_path))
+    assert services.get_training_repository_root() == tmp_path.resolve()
+
+    other_root = tmp_path / "other"
+    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(other_root))
+    assert services.get_training_repository_root() == other_root.resolve()
+    assert services.PROJECT_ROOT == original_project_root
+
+
+def test_tracking_uri_reads_current_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert services.get_tracking_uri() == "http://127.0.0.1:5000"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", " http://mlflow.test:5000 ")
+    assert services.get_tracking_uri() == "http://mlflow.test:5000"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "sqlite:///artifacts/mlflow.db")
+    assert services.get_tracking_uri() == "sqlite:///artifacts/mlflow.db"
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "message"),
+    [
+        ("TRAINING_REPOSITORY_ROOT", "", "must not be empty"),
+        ("TRAINING_REPOSITORY_ROOT", "   ", "must not be empty"),
+        ("TRAINING_REPOSITORY_ROOT", "relative/repository", "absolute path"),
+        ("MLFLOW_TRACKING_URI", "", "must not be empty"),
+        ("MLFLOW_TRACKING_URI", "   ", "must not be empty"),
+    ],
+)
+def test_train_pipeline_rejects_invalid_settings_before_loading_data(
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    value: str,
+    message: str,
+) -> None:
+    load_data = MagicMock()
+    training = MagicMock()
+    monkeypatch.setenv(setting, value)
+    monkeypatch.setattr(services, "load_raw_data", load_data)
+    monkeypatch.setattr(services, "run_training_experiment", training)
+
+    with pytest.raises(ValueError, match=message):
+        services.train_pipeline()
+
+    load_data.assert_not_called()
+    training.assert_not_called()
+
+
 @pytest.fixture
 def training_csv(tmp_path: Path) -> Path:
     """Create an isolated initial dataset without using repository data."""
@@ -71,16 +135,19 @@ def training_csv(tmp_path: Path) -> Path:
         }
     )
 
-    path = tmp_path / "training.csv"
+    path = tmp_path / "data" / "raw" / "predictive_maintenance_5000.csv"
+    path.parent.mkdir(parents=True)
     data.to_csv(path, index=False)
     return path
 
 
 @pytest.mark.parametrize("model_type", ["gradient_boosting", "xgboost"])
+@pytest.mark.parametrize("tracking_uri", [None, "http://mlflow.test:5000"])
 def test_train_pipeline_prepares_data_and_calls_training(
     training_csv: Path,
     monkeypatch: pytest.MonkeyPatch,
     model_type: ModelType,
+    tracking_uri: str | None,
 ) -> None:
     expected_result: dict[str, object] = {
         "run_id": "service-test-run",
@@ -90,7 +157,9 @@ def test_train_pipeline_prepares_data_and_calls_training(
     }
     training = MagicMock(return_value=expected_result)
 
-    monkeypatch.setattr(services, "DATASET_PATH", training_csv)
+    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(training_csv.parents[2]))
+    if tracking_uri is not None:
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
     monkeypatch.setattr(services, "run_training_experiment", training)
 
     result = services.train_pipeline(model_type=model_type)
@@ -99,6 +168,9 @@ def test_train_pipeline_prepares_data_and_calls_training(
     training.assert_called_once()
     assert training.call_args is not None
     assert training.call_args.kwargs["model_type"] == model_type
+    assert training.call_args.kwargs["tracking_uri"] == (
+        tracking_uri or "http://127.0.0.1:5000"
+    )
 
     splits: DataSplits = training.call_args.kwargs["splits"]
 
@@ -128,7 +200,7 @@ def test_train_pipeline_rejects_missing_dataset(
 ) -> None:
     training = MagicMock()
 
-    monkeypatch.setattr(services, "DATASET_PATH", tmp_path / "missing.csv")
+    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(tmp_path))
     monkeypatch.setattr(services, "run_training_experiment", training)
 
     with pytest.raises(FileNotFoundError, match="Data file not found"):
@@ -281,3 +353,20 @@ def test_predict_pipeline_uses_default_tracking_uri(
         "models:/m-test-model",
         "http://127.0.0.1:5000",
     )
+
+
+@pytest.mark.parametrize("tracking_uri", ["", "   "])
+def test_predict_pipeline_rejects_empty_tracking_uri_before_loading_model(
+    prediction_request: PredictionRequest,
+    prediction_setup: tuple[MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+    tracking_uri: str,
+) -> None:
+    model, loader = prediction_setup
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
+
+    with pytest.raises(ValueError, match="MLFLOW_TRACKING_URI must not be empty"):
+        services.predict_pipeline(prediction_request)
+
+    loader.assert_not_called()
+    model.predict_proba.assert_not_called()

@@ -22,14 +22,40 @@ from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "predictive_maintenance_5000.csv"
+
+
+def get_training_repository_root() -> Path:
+    """Read the server-controlled repository used for training data."""
+    value = os.environ.get("TRAINING_REPOSITORY_ROOT", str(PROJECT_ROOT))
+    if not value.strip():
+        raise ValueError("TRAINING_REPOSITORY_ROOT must not be empty.")
+
+    repository_root = Path(value)
+    if not repository_root.is_absolute():
+        raise ValueError("TRAINING_REPOSITORY_ROOT must be an absolute path.")
+
+    return repository_root.resolve()
+
+
+def get_tracking_uri() -> str:
+    """Read the shared MLflow backend for API training and prediction."""
+    value = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+    if not value.strip():
+        raise ValueError("MLFLOW_TRACKING_URI must not be empty.")
+
+    return value.strip()
 
 
 def train_pipeline(
     model_type: ModelType = "gradient_boosting",
 ) -> dict[str, object]:
     """Train and log a model using the initial dataset and fixed splits."""
-    raw_data = load_raw_data(DATASET_PATH)
+    tracking_uri = get_tracking_uri()
+    dataset_path = (
+        get_training_repository_root()
+        / "data" / "raw" / "predictive_maintenance_5000.csv"
+    )
+    raw_data = load_raw_data(dataset_path)
 
     processor = DataProcessor()
     normalized_data = processor.rename_columns(raw_data)
@@ -40,6 +66,7 @@ def train_pipeline(
     return run_training_experiment(
         splits=splits,
         model_type=model_type,
+        tracking_uri=tracking_uri,
     )
 
 
@@ -65,10 +92,7 @@ def predict_pipeline(data: PredictionRequest) -> PredictionResponse:
     if not model_uri:
         raise RuntimeError("MODEL_URI is not configured.")
 
-    tracking_uri = os.environ.get(
-        "MLFLOW_TRACKING_URI",
-        "http://127.0.0.1:5000",
-    )
+    tracking_uri = get_tracking_uri()
     model = load_prediction_model(model_uri, tracking_uri)
 
     features = pd.DataFrame(

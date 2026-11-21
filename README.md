@@ -165,6 +165,36 @@ API responsiveness; `/predict` requires a configured model.
 
 ### Train and choose a prediction model
 
+#### Server-side training settings
+
+The API reads these environment variables when a service operation runs:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TRAINING_REPOSITORY_ROOT` | Application repository root | Repository containing the training dataset and Git/DVC metadata. |
+| `MLFLOW_TRACKING_URI` | `http://127.0.0.1:5000` | Shared MLflow backend for API training and prediction. |
+
+Normal local development does not require `TRAINING_REPOSITORY_ROOT`.
+To use a separate training checkout, set its absolute path in the API terminal
+before starting the server:
+
+```powershell
+$env:TRAINING_REPOSITORY_ROOT = "C:/path/to/MlSecOps_project"
+```
+
+Training reads `data/raw/predictive_maintenance_5000.csv` beneath that root.
+The root must be absolute, and explicitly empty or whitespace-only settings
+are rejected. The HTTP request cannot override either setting. Changing the
+training root does not move the prediction-event database.
+
+This configuration prepares API integration with `train_from_dvc(...)`;
+the current `/train` service still uses initial training without DVC
+verification or Registry selection. A separate checkout currently controls
+the dataset location only: run the API from its own repository root because
+model logging still uses the relative `src/` code path.
+
+#### Training request
+
 In Swagger UI, call `POST /train` with:
 
 ```json
