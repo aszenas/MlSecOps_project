@@ -85,12 +85,9 @@ def load_prediction_model(
 
 def predict_pipeline(data: PredictionRequest) -> PredictionResponse:
     """Predict machine failure using the configured fitted pipeline."""
-    model_uri = os.environ.get("MODEL_URI")
-
-    if not model_uri:
-        raise RuntimeError("MODEL_URI is not configured.")
-
     tracking_uri = get_tracking_uri()
+    version = resolve_champion_version(tracking_uri)
+    model_uri = f"models:/{REGISTERED_MODEL_NAME}/{version}"
     model = load_prediction_model(model_uri, tracking_uri)
 
     features = pd.DataFrame(
@@ -115,6 +112,6 @@ def predict_pipeline(data: PredictionRequest) -> PredictionResponse:
     return PredictionResponse(
         prediction=prediction,
         probability=probability,
-        model_version=model_uri.removeprefix("models:/"),
+        model_version=version,
         mode="real",
     )

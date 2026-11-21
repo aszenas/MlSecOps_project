@@ -38,7 +38,7 @@ def prediction_setup(
     model.predict_proba.return_value = [[0.9, 0.1]]
     loader = MagicMock(return_value=model)
 
-    monkeypatch.setenv("MODEL_URI", "models:/m-test-model")
+    monkeypatch.setattr(services, "get_champion_version", MagicMock(return_value="1"))
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://mlflow.test:5000")
     monkeypatch.setattr(services, "load_prediction_model", loader)
 
@@ -254,11 +254,11 @@ def test_predict_pipeline_applies_threshold(
 
     assert result.prediction == expected_prediction
     assert result.probability == pytest.approx(probability)
-    assert result.model_version == "m-test-model"
+    assert result.model_version == "1"
     assert result.mode == "real"
 
     loader.assert_called_once_with(
-        "models:/m-test-model",
+        "models:/predictive-maintenance-model/1",
         "http://mlflow.test:5000",
     )
     model.predict_proba.assert_called_once()
@@ -296,18 +296,18 @@ def test_predict_pipeline_rejects_invalid_probabilities(
         services.predict_pipeline(prediction_request)
 
 
-def test_predict_pipeline_rejects_missing_model_uri(
+def test_predict_pipeline_uses_champion_without_model_uri(
     prediction_request: PredictionRequest,
     prediction_setup: tuple[MagicMock, MagicMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, loader = prediction_setup
-    monkeypatch.delenv("MODEL_URI")
-
-    with pytest.raises(RuntimeError, match="MODEL_URI is not configured"):
-        services.predict_pipeline(prediction_request)
-
-    loader.assert_not_called()
+    monkeypatch.delenv("MODEL_URI", raising=False)
+    result = services.predict_pipeline(prediction_request)
+    assert result.model_version == "1"
+    loader.assert_called_once_with(
+        "models:/predictive-maintenance-model/1", "http://mlflow.test:5000",
+    )
 
 
 def test_predict_pipeline_uses_default_tracking_uri(
@@ -321,7 +321,7 @@ def test_predict_pipeline_uses_default_tracking_uri(
     services.predict_pipeline(prediction_request)
 
     loader.assert_called_once_with(
-        "models:/m-test-model",
+        "models:/predictive-maintenance-model/1",
         "http://127.0.0.1:5000",
     )
 
@@ -341,3 +341,30 @@ def test_predict_pipeline_rejects_empty_tracking_uri_before_loading_model(
 
     loader.assert_not_called()
     model.predict_proba.assert_not_called()
+
+
+def test_prediction_cache_follows_concrete_champion_versions(
+    prediction_request: PredictionRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = MagicMock(spec=Pipeline)
+    second = MagicMock(spec=Pipeline)
+    first.predict_proba.return_value = [[0.9, 0.1]]
+    second.predict_proba.return_value = [[0.2, 0.8]]
+    loader = MagicMock(side_effect=[first, second, first])
+    lookup = MagicMock(side_effect=["1", "1", "2", "2", "1"])
+    monkeypatch.setattr(services, "get_champion_version", lookup)
+    monkeypatch.setattr(services.mlflow_sklearn, "load_model", loader)
+    monkeypatch.setattr(services.mlflow, "set_tracking_uri", MagicMock())
+    monkeypatch.setenv("MODEL_URI", "models:/m-stale-ignored")
+
+    responses = [services.predict_pipeline(prediction_request) for _ in range(5)]
+
+    assert [result.model_version for result in responses] == ["1", "1", "2", "2", "1"]
+    assert [result.prediction for result in responses] == [0, 0, 1, 1, 0]
+    assert lookup.call_count == 5
+    assert [call.args[0] for call in loader.call_args_list] == [
+        "models:/predictive-maintenance-model/1",
+        "models:/predictive-maintenance-model/2",
+        "models:/predictive-maintenance-model/1",
+    ]
