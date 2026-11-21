@@ -7,6 +7,8 @@ import pytest
 
 from src.predictive_maintenance.data.splitting import (
     create_initial_data_splits,
+    create_retraining_data_splits,
+    V2_TRAINING_UDIS,
 )
 
 
@@ -211,3 +213,48 @@ def test_invalid_target_values(
 
     with pytest.raises(ValueError, match="Target must contain"):
         create_initial_data_splits(X, invalid_y)
+
+
+def test_retraining_moves_selected_future_rows_into_train(
+    sample_dataset: tuple[pd.DataFrame, pd.Series],
+) -> None:
+    X, y = sample_dataset
+    v1 = create_initial_data_splits(X, y)
+
+    # Use UDIs distinct from row indexes and test the requested order.
+    moved_rows = v1.X_future.index[:10][::-1].tolist()
+    source_udis = pd.Series(range(10001, 15001), index=X.index)
+    source_udis.loc[moved_rows] = list(V2_TRAINING_UDIS)
+
+    v2 = create_retraining_data_splits(v1, source_udis)
+
+    assert len(v1.X_train) == 3000
+    assert len(v1.X_future) == 750
+    assert len(v2.X_train) == 3010
+    assert len(v2.X_future) == 740
+    assert v2.X_train.index.is_unique
+    assert v2.X_train.index.intersection(v2.X_future.index).empty
+
+    pd.testing.assert_frame_equal(v2.X_train.iloc[:3000], v1.X_train)
+    pd.testing.assert_series_equal(v2.y_train.iloc[:3000], v1.y_train)
+    pd.testing.assert_frame_equal(v2.X_train.iloc[3000:], v1.X_future.loc[moved_rows])
+    pd.testing.assert_series_equal(v2.y_train.iloc[3000:], v1.y_future.loc[moved_rows])
+    pd.testing.assert_frame_equal(v2.X_future, v1.X_future.drop(index=moved_rows))
+    pd.testing.assert_series_equal(v2.y_future, v1.y_future.drop(index=moved_rows))
+
+    pd.testing.assert_frame_equal(v2.X_validation, v1.X_validation)
+    pd.testing.assert_series_equal(v2.y_validation, v1.y_validation)
+    pd.testing.assert_frame_equal(v2.X_test, v1.X_test)
+    pd.testing.assert_series_equal(v2.y_test, v1.y_test)
+
+
+def test_retraining_rejects_udi_from_validation_split(
+    sample_dataset: tuple[pd.DataFrame, pd.Series],
+) -> None:
+    X, y = sample_dataset
+    v1 = create_initial_data_splits(X, y)
+    source_udis = pd.Series(range(10001, 15001), index=X.index)
+    validation_udi = int(source_udis.loc[v1.X_validation.index[0]])
+
+    with pytest.raises(ValueError, match="must belong to the future split"):
+        create_retraining_data_splits(v1, source_udis, (validation_udi,))
