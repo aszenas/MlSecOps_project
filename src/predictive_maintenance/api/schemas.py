@@ -63,6 +63,17 @@ class TrainingResponse(BaseModel):
     mode: Literal["real"]
 
 
+class RegistryTrainingResponse(TrainingResponse):
+    """Report the candidate separately from the selected champion."""
+
+    registered_model_name: str = Field(min_length=1)
+    registered_version: str = Field(pattern=r"^[1-9][0-9]*$")
+    champion_version: str | None = Field(pattern=r"^[1-9][0-9]*$")
+    champion_version_before: str | None = Field(pattern=r"^[1-9][0-9]*$")
+    promoted: bool
+    selection_reason: str = Field(min_length=1)
+
+
 class MockTrainingResponse(BaseModel):
     status: Literal["mock_completed"]
     training_run_id: None = None
