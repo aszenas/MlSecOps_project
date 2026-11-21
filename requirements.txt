@@ -29,3 +29,4 @@ httpx2
 mlflow==3.17.2
 xgboost==3.2.0
 evidently==0.7.23
+dvc[s3]==3.67.1
