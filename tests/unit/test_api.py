@@ -2,6 +2,7 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -12,7 +13,10 @@ from mlflow.exceptions import MlflowException
 
 from predictive_maintenance.api import routes
 from predictive_maintenance.api.main import app
+from predictive_maintenance.api.services import ChampionNotFoundError
 from predictive_maintenance.api.schemas import PredictionResponse
+from predictive_maintenance.models.training_registry import TrainingRegistryResult
+from predictive_maintenance.models.model_selection import SelectionResult
 
 client = TestClient(app)
 
@@ -48,21 +52,19 @@ def prediction_data() -> dict[str, str | float]:
 @pytest.fixture(autouse=True)
 def mock_training(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace training during API tests to avoid external side effects."""
-    training = MagicMock(
-        return_value={
-            "run_id": "test-run-123",
-            "model_type": "gradient_boosting",
-            "model_uri": "models:/test-model",
-            "metrics": {
-                "accuracy": 0.95,
-                "precision": 0.80,
-                "recall": 0.75,
-                "f1": 0.77,
-                "roc_auc": 0.90,
-                "average_precision": 0.85,
+    training = MagicMock(return_value=TrainingRegistryResult(
+        run_id="test-run-123", model_uri="models:/test-model",
+        registered_model_name="predictive-maintenance-model", registered_version="2",
+        selection=SelectionResult(
+            promoted=True, reason="higher_f1", selected_version="2",
+            challenger_version="2", champion_version_before="1",
+            challenger_metrics={
+                "accuracy": 0.95, "precision": 0.80, "recall": 0.75,
+                "f1": 0.77, "roc_auc": 0.90, "average_precision": 0.85,
             },
-        }
-    )
+            champion_metrics={"f1": 0.7, "recall": 0.75},
+        ),
+    ))
     monkeypatch.setattr(routes, "train_pipeline", training)
     return training
 
@@ -74,7 +76,7 @@ def mock_prediction(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         return_value=PredictionResponse(
             prediction=0,
             probability=0.1,
-            model_version="m-test-model",
+            model_version="1",
             mode="real",
         )
     )
@@ -105,7 +107,7 @@ def test_predict_returns_prediction_result(
     assert response.json() == {
         "prediction": 0,
         "probability": 0.1,
-        "model_version": "m-test-model",
+        "model_version": "1",
         "mode": "real",
     }
 
@@ -121,7 +123,9 @@ def test_predict_returns_prediction_result(
     event = events[0]
     assert event["request_id"] == request_id
     assert event["inputs"] == prediction_data
-    assert event["model_uri"] == "models:/m-test-model"
+    assert event["model_uri"] == "models:/predictive-maintenance-model/1"
+    assert event["registered_model_name"] == "predictive-maintenance-model"
+    assert event["model_alias"] == "models:/predictive-maintenance-model@champion"
     assert event["model_version"] == response.json()["model_version"]
     assert event["prediction"] == response.json()["prediction"]
     assert event["probability"] == response.json()["probability"]
@@ -202,8 +206,6 @@ def test_train_returns_training_result(
     model_type: str,
     mock_training: MagicMock,
 ) -> None:
-    mock_training.return_value["model_type"] = model_type
-
     response = client.post(
         "/train",
         json={
@@ -219,7 +221,13 @@ def test_train_returns_training_result(
         "training_run_id": "test-run-123",
         "model_type": model_type,
         "model_uri": "models:/test-model",
-        "metrics": mock_training.return_value["metrics"],
+        "metrics": mock_training.return_value.selection.challenger_metrics,
+        "registered_model_name": "predictive-maintenance-model",
+        "registered_version": "2",
+        "champion_version": "2",
+        "champion_version_before": "1",
+        "promoted": True,
+        "selection_reason": "higher_f1",
         "mode": "real",
     }
     mock_training.assert_called_once_with(model_type=model_type)
@@ -232,6 +240,37 @@ def test_train_accepts_empty_object(mock_training: MagicMock) -> None:
     assert response.json()["status"] == "completed"
     assert response.json()["model_type"] == "gradient_boosting"
     mock_training.assert_called_once_with(model_type="gradient_boosting")
+
+
+@pytest.mark.parametrize("champion", ["1", None])
+def test_rejected_training_is_completed_without_claiming_a_promotion(
+    mock_training: MagicMock, champion: str | None,
+) -> None:
+    original = mock_training.return_value
+    mock_training.return_value = replace(
+        original,
+        selection=replace(
+            original.selection, promoted=False, selected_version=champion,
+            champion_version_before=champion, reason="recall_below_minimum",
+        ),
+    )
+    response = client.post("/train", json={})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "completed"
+    assert result["registered_version"] == "2"
+    assert result["champion_version"] == champion
+    assert result["promoted"] is False
+    assert result["selection_reason"] == "recall_below_minimum"
+
+
+@pytest.mark.parametrize("setting", ["tracking_uri", "repository_root"])
+def test_training_request_cannot_override_server_configuration(
+    setting: str, mock_training: MagicMock,
+) -> None:
+    response = client.post("/train", json={setting: "untrusted-value"})
+    assert response.status_code == 422
+    mock_training.assert_not_called()
 
 
 def test_train_rejects_missing_body() -> None:
@@ -308,6 +347,21 @@ def test_train_rejects_extra_field() -> None:
             "The MLflow operation could not be completed.",
         ),
         (
+            RuntimeError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
+            OSError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
+            PermissionError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
             ValueError,
             500,
             "Training failed because of invalid data or configuration.",
@@ -336,6 +390,11 @@ def test_train_handles_service_errors(
             RuntimeError,
             503,
             "The prediction model is unavailable.",
+        ),
+        (
+            ChampionNotFoundError,
+            503,
+            "No champion model is available.",
         ),
         (
             OSError,
@@ -377,6 +436,7 @@ def test_predict_handles_service_errors(
     assert event["inputs"] == prediction_data
     assert event["status"] == "error"
     assert event["http_status"] == expected_status
+    assert event["model_uri"] is None
     assert event["error"] == expected_detail
     assert "Internal diagnostic details" not in json.dumps(event)
 

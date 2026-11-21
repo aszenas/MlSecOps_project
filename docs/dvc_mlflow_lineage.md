@@ -6,7 +6,8 @@ The integration connects the DVC-managed raw dataset to preprocessing,
 MLflow training, model registration and champion selection.
 
 It records verified Git/DVC references and exact initial split membership.
-API endpoint integration and Docker Compose configuration are separate tasks.
+The API now delegates to this verified training entrypoint. Docker Compose
+configuration remains a separate task.
 
 ## Requirements
 
@@ -122,7 +123,10 @@ train_from_dvc(repository_root, model_type, tracking_uri)
 
 The API should supply server-controlled repository and backend settings.
 It must handle missing data, dirty source state and backend errors.
-The current integration does not change HTTP routes or serving behavior.
+The `/train` service now calls this entrypoint and returns the candidate and
+selected champion separately. `/predict` resolves the champion alias per request
+and caches concrete versions. See [API contract](api_contract.md) for response
+fields and controlled failures. The API uses the same tracking/Registry backend.
 
 ## Automated validation
 

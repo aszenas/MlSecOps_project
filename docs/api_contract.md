@@ -1,6 +1,6 @@
 # API Contract
 
-This document describes real model training with MLflow tracking and real prediction using a configured fitted pipeline.
+This document describes verified DVC training, MLflow Registry champion selection, and prediction using the current champion pipeline.
 
 Base URL for local development: `http://127.0.0.1:8000`
 
@@ -55,13 +55,13 @@ The numeric fields use Pydantic's default type conversion rather than strict typ
 
 ### Successful response — 200 OK
 
-The following response was observed locally for the example request using the indicated logged model. Other models or inputs can return different values.
+The following response is illustrative. Probabilities and concrete Registry versions depend on the selected champion and input.
 
 ```json
 {
   "prediction": 0,
-  "probability": 0.012770727629820311,
-  "model_version": "m-6215dba09ce64077bb59887734445acf",
+  "probability": 0.1,
+  "model_version": "2",
   "mode": "real"
 }
 ```
@@ -70,14 +70,14 @@ The following response was observed locally for the example request using the in
 | --- | --- |
 | `prediction` | `0`: no failure; `1`: failure |
 | `probability` | Probability of failure, between 0 and 1 |
-| `model_version` | Configured model URI with the `models:/` prefix removed; for logged-model URIs this is an `m-...` identifier, not a Registry version number |
+| `model_version` | Concrete version of `predictive-maintenance-model` used for this prediction, such as `"2"` |
 | `mode` | Always `"real"` for this endpoint |
 
 ### Prediction behavior and model configuration
 
-The server reads `MODEL_URI` from its environment. This variable is required for prediction and must identify a trusted fitted sklearn Pipeline accessible through the configured MLflow backend. Clients cannot supply a model URI in the request.
+The server resolves the `champion` alias of `predictive-maintenance-model` before every prediction. It loads the immutable URI `models:/predictive-maintenance-model/<version>`. Clients cannot choose a model or Registry backend. The old `MODEL_URI` environment variable is ignored.
 
-`MLFLOW_TRACKING_URI` selects the MLflow backend; its default is `http://127.0.0.1:5000`.
+`MLFLOW_TRACKING_URI` selects both the tracking and Registry backend; its default is `http://127.0.0.1:5000`. An explicitly blank setting is rejected.
 
 The service builds a single-row DataFrame using the six normalized feature names in the model's expected order. The loaded pipeline performs preprocessing internally; it is not fitted again during prediction.
 
@@ -85,19 +85,26 @@ The trained binary classifier uses class order `[0, 1]`. The service reads the p
 
 The failure prediction is `1` when the failure probability is greater than or equal to `0.5`; otherwise it is `0`.
 
-The most recently loaded `(model_uri, tracking_uri)` pair is cached in memory per process. Repeated requests for that pair reuse the pipeline without reloading it from MLflow. The first load, a different pair, or an API process restart requires artifact access again. Changing `MODEL_URI` in a terminal does not update a running API process: set the variable and restart the API.
+The most recently loaded concrete `(model_uri, tracking_uri)` pair is cached
+per process. Every request still checks the alias. The same version reuses the
+pipeline; a promoted or rolled-back version is loaded on the next request.
+The version is resolved once per request, so an alias change during processing
+does not change that request's response or recorded model identity.
 
-Prediction does not load the training CSV. It uses the model and preprocessing already saved in MLflow. Running `/train` does not automatically update `MODEL_URI` or activate the newly trained model.
+If alias lookup fails, the API does not silently serve a stale cached model.
+Prediction does not load the CSV or refit preprocessing. A successful `/train`
+may promote its candidate; a rejected candidate leaves the champion unchanged.
 
 ### Operational errors
 
 | Status | Detail |
 | --- | --- |
+| `503` | `No champion model is available.` |
 | `503` | `The prediction model is unavailable.` |
 | `500` | `Prediction failed because of invalid model data.` |
 | `503` | `The prediction event could not be stored.` |
 
-The `503` handler covers the missing `MODEL_URI` configuration and handled MLflow, runtime, or operating-system failures. The `500` handler covers `ValueError`, including an incompatible loaded object or invalid probability output. These responses contain a string-valued `detail`, for example:
+A missing model or champion alias returns the specific no-champion `503`. Other handled MLflow, runtime, or operating-system failures return the general unavailable-model `503`. The `500` handler covers `ValueError`, including an incompatible loaded object or invalid probability output. These responses contain a string-valued `detail`, for example:
 
 ```json
 {
@@ -122,13 +129,18 @@ primary key and `payload` containing JSON. Event fields are:
 | `request_id` | UUID matching the response header |
 | `timestamp` | Request processing start time in UTC ISO 8601 format |
 | `inputs` | The six validated request features |
-| `model_uri` | Configured model URI, or null when configuration is missing |
+| `registered_model_name` | `predictive-maintenance-model` |
+| `model_alias` | `models:/predictive-maintenance-model@champion` |
+| `model_uri` | Concrete served version URI on success; null on a handled prediction failure |
 | `decision_threshold` | `0.5` |
 | `status` | `success` or `error` |
 | `http_status` | Intended prediction status: `200`, `503`, or `500` |
 | `prediction`, `probability`, `model_version`, `mode` | Successful prediction result fields |
 | `error` | Public error message for a handled prediction failure |
 
+The logged success URI is constructed from the version returned by prediction,
+without resolving the alias a second time. Failed events do not claim a served
+model version. Historical records retain their original identifiers.
 Internal exception messages and stack traces are not stored in these events.
 Requests rejected with `422` do not reach this logging step. Unhandled failures
 are not covered by this event logger.
@@ -195,7 +207,7 @@ See the README for command examples and restart/retry instructions.
 
 ## POST /train
 
-Loads the configured initial dataset, trains the selected model, evaluates it on the validation partition, and logs the results to MLflow.
+Verifies the initial Git/DVC dataset, trains and logs a candidate, registers a version, and completes audited champion selection.
 
 ### Request fields
 
@@ -213,7 +225,10 @@ All request fields have defaults. Additional fields and explicit null values are
 data/raw/predictive_maintenance_5000.csv
 ```
 
-This path is relative to the repository root. It refers to the root-level data directory, not the Python modules under `src/predictive_maintenance/data/`.
+This path is relative to the server-controlled `TRAINING_REPOSITORY_ROOT`,
+which defaults to the application repository root. An override must be an
+absolute path; explicitly blank values are rejected. It refers to dataset
+storage, not Python modules under `src/predictive_maintenance/data/`.
 
 Clients cannot supply an arbitrary file path.
 
@@ -227,12 +242,13 @@ The initial dataset must contain exactly 5,000 records with the original raw CSV
 
 The training service:
 
-1. Loads and validates the raw CSV.
-2. Normalizes column names.
-3. Separates the six input features from the binary target.
-4. Creates reproducible, stratified dataset partitions.
-5. Trains and evaluates the selected model.
-6. Logs the training results to MLflow.
+1. Verifies a clean Git checkout and unchanged DVC dataset.
+2. Loads and validates the CSV, normalizes columns, and separates features/target.
+3. Creates the fixed initial partitions and rechecks Git/DVC references.
+4. Trains, evaluates and logs the selected candidate.
+5. Registers the model and logs dataset lineage and the exact split manifest.
+6. Compares candidate/champion on validation data and records the decision.
+7. Promotes an eligible candidate and verifies the alias, or keeps the champion.
 
 | Partition | Records | Purpose |
 | --- | ---: | --- |
@@ -281,17 +297,29 @@ The following response is illustrative. The identifiers and metric values depend
     "roc_auc": 0.90,
     "average_precision": 0.85
   },
-  "mode": "real"
+  "mode": "real",
+  "registered_model_name": "predictive-maintenance-model",
+  "registered_version": "2",
+  "champion_version": "2",
+  "champion_version_before": "1",
+  "promoted": true,
+  "selection_reason": "higher_f1"
 }
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `"completed"` indicates successful completion |
+| `status` | `"completed"` means training and selection completed, including a rejected candidate |
 | `training_run_id` | The actual MLflow training run ID |
 | `model_type` | The selected classifier |
 | `model_uri` | URI used to load the logged preprocessing and model pipeline |
-| `metrics` | Six metrics calculated on the validation partition |
+| `metrics` | Six candidate metrics calculated on the validation partition |
+| `registered_model_name` | Registered model name |
+| `registered_version` | Newly registered candidate version |
+| `champion_version` | Selected champion version, or null when no candidate has qualified |
+| `champion_version_before` | Champion before this selection, or null |
+| `promoted` | Whether this completed operation promoted the candidate |
+| `selection_reason` | Decision reason, such as `higher_f1`, `first_champion`, `f1_not_improved`, or `recall_below_minimum` |
 | `mode` | Always `"real"` for this endpoint |
 
 Training is synchronous: the response is returned after the operation finishes. No background job is created.
@@ -303,17 +331,27 @@ The operation logs the following to MLflow:
 - Git commit and experiment metadata.
 - The complete fitted preprocessing and classifier pipeline.
 
-The returned `model_uri` identifies a logged model. It does not by itself indicate that a Model Registry version or champion alias has been created.
+The returned `model_uri` identifies the logged candidate artifact, which may
+have been rejected. Use `champion_version` to identify the selected serving
+model. Promotion requires recall >= 0.70 and, when a champion exists, a strictly
+higher validation F1. An equal F1 or insufficient recall preserves the champion.
 
-Training does not automatically activate the new model for prediction. To use the returned model, configure its `model_uri` as the API process's `MODEL_URI` and restart the API.
+With no previous champion, a rejected first candidate returns
+`champion_version: null` and `promoted: false`; `/predict` then returns `503`.
+On successful promotion, the next prediction uses the new version without an
+API restart. Rejected versions remain registered and linked to their run.
+Concurrent selection/promotion coordination remains a separate limitation of
+the underlying Registry workflow; do not run multiple promotion jobs at once.
 
 ### Operational requirements
 
 The operation requires:
 
-- The configured CSV file.
+- A clean Git training checkout, valid `data/raw.dvc`, the restored unchanged CSV,
+  and DVC available in the API Python environment.
 - The project's Python dependencies.
-- An accessible MLflow tracking backend and writable artifact storage.
+- An accessible MLflow tracking/Registry backend, registration/alias permissions,
+  and writable artifact storage.
 
 The training code uses the `MLFLOW_TRACKING_URI` environment variable when set. Otherwise, it defaults to:
 
@@ -331,6 +369,7 @@ The route explicitly handles the following failures:
 | --- | --- |
 | `503` | `The training dataset is unavailable.` |
 | `503` | `The MLflow operation could not be completed.` |
+| `503` | `The training data or registry service is unavailable.` |
 | `500` | `Training failed because of invalid data or configuration.` |
 
 These responses contain a string-valued `detail` field:
@@ -341,7 +380,10 @@ These responses contain a string-valued `detail` field:
 }
 ```
 
-Unexpected failures may also result in HTTP `500`.
+Git/DVC verification runtime failures and operating-system failures use the
+training-data/Registry `503`. Validation errors raised by provenance or training
+use the invalid-data/configuration `500`. Internal diagnostic details are not
+returned. Unexpected failures may also result in HTTP `500`.
 
 ## Validation errors — 422 Unprocessable Entity
 
@@ -372,19 +414,21 @@ Request validation takes place before the endpoint function runs. Invalid traini
 
 ## Current scope and remaining integration
 
-Both `/train` and `/predict` are connected to real services. Model loading and per-process caching are implemented. The retained mock service functions are not called by the current routes.
+`/train` delegates to verified DVC training and audited Registry selection.
+`/predict` resolves the champion per request, caches concrete versions and
+records the actually served version. Persistent prediction storage and JSON
+artifact export remain implemented. The retained mock services are not used
+by current routes. `/health` only checks API responsiveness.
 
-The following parts are not implemented yet:
+API and service unit tests isolate external dependencies. Dedicated integration
+tests use real temporary MLflow model artifacts and Registry aliases to verify
+promotion, rejection, backend selection, cache updates and event identities.
+Their DVC training adapter is controlled; full real-data DVC training remains
+covered by the separate lineage integration tests.
 
-- Automatic model activation or Registry-based model selection.
-
-Persistent local prediction logging and JSON prediction artifact export are implemented. Registry-based activation and the wider automated monitoring/retraining workflow belong to later integration work.
-
-The `/health` endpoint checks API responsiveness only.
-
-API unit tests replace training and prediction services with controlled results. Service tests exercise data preparation, model-loading/cache behavior, decision thresholds, missing configuration, and invalid model output while isolating external calls. They do not require the developer's running MLflow server.
-
-Separate local Swagger calls have demonstrated successful training, loading the saved pipeline, and a real prediction. Automated MLflow integration tests additionally upload and download prediction artifacts using isolated storage. These checks do not establish remote CI or deployment status; review the latest quality-check results before merging.
+Docker Compose, live monitoring input, drift-triggered retraining and dashboard
+integration remain subsequent tasks. Passing these focused tests does not
+establish full-project CI or deployment status.
 
 Any changes to the public API contract must also be reflected in the
 schemas, examples, tests, and this document.
