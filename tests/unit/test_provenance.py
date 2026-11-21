@@ -10,6 +10,7 @@ from predictive_maintenance.data.provenance import (
     read_clean_git_commit,
     read_dvc_directory_hash,
     verify_dvc_dataset,
+    verify_dvc_training_file,
 )
 
 
@@ -217,3 +218,56 @@ def test_reports_dvc_execution_failure(
     ):
         with pytest.raises(RuntimeError, match="verify the DVC dataset"):
             verify_dvc_dataset(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("file_exists", "status", "error"),
+    [
+        (True, "{}", None),
+        (False, "{}", "dataset is missing"),
+        (True, '{"train_v2.csv.dvc": ["modified"]}', "differs from the recorded state"),
+    ],
+)
+def test_verifies_versioned_training_file(
+    tmp_path: Path, file_exists: bool, status: str, error: str | None,
+) -> None:
+    """Verify the exact v2 target and reject absent or modified data."""
+    pointer = "data/processed/training/train_v2.csv.dvc"
+    metadata = tmp_path / pointer
+    metadata.parent.mkdir(parents=True)
+    file_hash = "a" * 32
+    metadata.write_text(
+        f"outs:\n- path: train_v2.csv\n  hash: md5\n  md5: {file_hash}\n",
+        encoding="utf-8",
+    )
+    if file_exists:
+        metadata.with_suffix("").write_text("UDI\n16\n", encoding="utf-8")
+
+    with patch(
+        "predictive_maintenance.data.provenance.subprocess.run",
+        return_value=git_result(status),
+    ) as run:
+        if error is None:
+            assert verify_dvc_training_file(tmp_path) == file_hash
+        else:
+            with pytest.raises(ValueError, match=error):
+                verify_dvc_training_file(tmp_path)
+
+    if file_exists:
+        run.assert_called_once()
+        assert run.call_args.args[0][1:] == ["-m", "dvc", "status", pointer, "--json"]
+    else:
+        run.assert_not_called()
+
+
+def test_rejects_directory_hash_for_training_file(tmp_path: Path) -> None:
+    """A file pointer must contain a file hash."""
+    pointer = tmp_path / "data/processed/training/train_v2.csv.dvc"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(
+        f"outs:\n- path: train_v2.csv\n  hash: md5\n  md5: {DIRECTORY_HASH}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid DVC file hash"):
+        verify_dvc_training_file(tmp_path)
