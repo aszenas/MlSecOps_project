@@ -97,6 +97,11 @@ def train(data: TrainingRequest) -> RegistryTrainingResponse:
             status_code=503,
             detail="The MLflow operation could not be completed.",
         ) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The training data or registry service is unavailable.",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=500,

@@ -312,6 +312,21 @@ def test_train_rejects_extra_field() -> None:
             "The MLflow operation could not be completed.",
         ),
         (
+            RuntimeError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
+            OSError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
+            PermissionError,
+            503,
+            "The training data or registry service is unavailable.",
+        ),
+        (
             ValueError,
             500,
             "Training failed because of invalid data or configuration.",
