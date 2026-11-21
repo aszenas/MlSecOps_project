@@ -5,7 +5,7 @@
 The root Dockerfile builds the FastAPI application using Python 3.11.
 The image can start and serve `/health` without a dataset or model.
 Training requires the dataset and an accessible MLflow backend.
-Prediction requires MODEL_URI, an accessible model and MLflow backend,
+Prediction requires an accessible Registry champion and MLflow backend,
 and a writable prediction log location.
 The complete Docker Compose environment is a separate integration task.
 
@@ -82,7 +82,15 @@ GitHub Actions build validation must be confirmed separately.
 ## Compose integration handoff
 
 The Compose configuration must provide dataset access, MLflow connectivity,
-MODEL_URI, and persistent writable prediction storage.
+a Registry champion, and persistent writable prediction storage. Set
+MLFLOW_TRACKING_URI to the internal MLflow service address. MODEL_URI is no
+longer used by API prediction; champion changes are observed on the next request.
+
+Verified training additionally requires DVC in the runtime Python environment,
+Git/DVC metadata and a clean training checkout with the restored CSV.
+TRAINING_REPOSITORY_ROOT can select an absolute mounted checkout path.
+The current base Dockerfile does not install DVC or provide that checkout;
+these are prerequisites for the forthcoming Compose training setup.
 
 The default prediction database is `/app/artifacts/predictions.db`.
 The current image does not prepare a writable `/app/artifacts` directory.

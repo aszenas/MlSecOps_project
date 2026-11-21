@@ -160,8 +160,8 @@ The repository root is also required because training logs `src/` with the model
 - Swagger UI: http://127.0.0.1:8000/docs
 - OpenAPI specification: http://127.0.0.1:8000/openapi.json
 
-The server can start before `MODEL_URI` is configured. `/health` only checks
-API responsiveness; `/predict` requires a configured model.
+The server can start before a champion exists. `/health` checks API
+responsiveness; `/predict` requires a reachable Registry champion.
 
 ### Train and choose a prediction model
 
@@ -187,11 +187,22 @@ The root must be absolute, and explicitly empty or whitespace-only settings
 are rejected. The HTTP request cannot override either setting. Changing the
 training root does not move the prediction-event database.
 
-This configuration prepares API integration with `train_from_dvc(...)`;
-the current `/train` service still uses initial training without DVC
-verification or Registry selection. A separate checkout currently controls
-the dataset location only: run the API from its own repository root because
-model logging still uses the relative `src/` code path.
+The API calls `train_from_dvc(...)` with these server-controlled settings.
+Before training, restore the data and verify that the training checkout is clean:
+
+```powershell
+python -m dvc pull data/raw.dvc -r dagshub
+git status --short
+```
+
+Install DVC with S3 support and configure personal credentials as described
+above. Commit or stash changes before training; an uncommitted feature branch
+is rejected by provenance validation. Git/DVC metadata and the restored CSV
+must be available in the training checkout.
+
+The API still runs from its application repository root because model logging
+uses its relative `src/` code path. A separate training checkout supplies the
+dataset and its Git/DVC provenance; it does not change the running API code.
 
 #### Training request
 
@@ -205,24 +216,24 @@ In Swagger UI, call `POST /train` with:
 }
 ```
 
-`xgboost` is also supported. Training is synchronous and returns a real
-`training_run_id`, `model_uri`, and six validation metrics. Check the run and
-logged model in the `predictive-maintenance-baselines` MLflow experiment.
+`xgboost` is also supported. Training verifies the Git/DVC dataset, logs the
+model, registers a candidate version and runs audited champion selection.
+The response includes the run, logged-model URI, six validation metrics,
+candidate version, selected champion version, `promoted`, and `selection_reason`.
 
-Copy the returned `model_uri`. Stop the API with `Ctrl+C`, then configure it
-in that same API terminal and restart. Replace the placeholder below with
-the complete URI returned by your training run:
+Inspect the run in `predictive-maintenance-baselines` and the registered model
+`predictive-maintenance-model` in MLflow. The `champion` alias identifies the
+currently selected version. Promotion requires recall of at least 0.70 and,
+when a champion exists, a strictly higher F1 score on the validation partition.
+An equal or worse candidate stays registered without replacing the champion.
 
-```powershell
-$env:MODEL_URI = "models:/<model-id-from-train-response>"
-python -m uvicorn predictive_maintenance.api.main:app --app-dir src --reload
-```
+A completed training operation does not guarantee promotion. If the first
+candidate is rejected, `champion_version` is null and prediction remains
+unavailable. On successful promotion, the next prediction resolves the new
+version automatically; no API restart or `MODEL_URI` update is required.
 
-The placeholder is not a usable model URI. Alternatively, use an existing
-trusted logged model accessible through the configured MLflow backend.
-
-Environment variables set this way apply to the current terminal and its
-child processes. Set them again when starting from a new terminal.
+Environment variables apply to the terminal and its child processes. Set the
+server settings before startup and restart the API after changing them.
 
 ### Make a real prediction
 
@@ -243,12 +254,17 @@ The fitted pipeline performs preprocessing and calculates the failure
 probability. The response uses `mode: "real"`; prediction `1` means the
 probability is at least `0.5`, otherwise the prediction is `0`.
 
-`model_version` currently contains the logged-model identifier, such as
-`m-...`; it is not a Model Registry version number.
+`model_version` is now the concrete Registry version, for example `"2"`.
+Before each prediction, the API resolves `predictive-maintenance-model@champion`
+and loads `models:/predictive-maintenance-model/<version>`. The latest concrete
+URI/backend pair is cached per process. Unchanged versions reuse the model;
+promotion or rollback selects the corresponding version on the next request.
 
-The process caches the most recently loaded model/MLflow-URI pair.
-Training does not automatically change the prediction model. To switch
-models, update `MODEL_URI` and restart the API. Only configure trusted models.
+`MODEL_URI` is no longer used by the API. The API does not fall back to a stale
+cached model if alias lookup fails. A missing champion returns `503` with
+`No champion model is available.`; backend failures return a controlled `503`.
+A request already using a resolved version completes with that same version
+even if the alias changes during processing. Only use trusted model artifacts.
 
 ## Persistent prediction events
 
@@ -263,14 +279,16 @@ $env:PREDICTION_LOG_DB = "C:/path/to/predictions.db"
 ```
 
 The `X-Request-ID` response header identifies the stored event. Events include
-a UTC timestamp, validated input features, model URI, threshold, status, and
+a UTC timestamp, validated input features, Registry name and alias, concrete
+model URI for successful predictions, threshold, status, and
 the prediction/probability/model identifier for successful requests. Handled
 prediction failures are stored with their public error message. Invalid `422`
 requests are rejected before this logging step. A storage failure returns
 `503` with `The prediction event could not be stored.` rather than reporting
 an unaudited prediction as successful.
 
-The JSON prediction response fields remain unchanged. Reusing the same database
+The JSON prediction response fields remain unchanged; `model_version` now
+contains the Registry version. Historical events retain their original values. Reusing the same database
 file preserves committed events across API restarts. Docker persistence will
 require mounting this path on persistent storage in Task 4.2. No pruning or
 retention policy is implemented yet. Prediction artifacts are uploaded by the
@@ -358,8 +376,8 @@ Only JSON is generated; CSV is not required for the current Task 4.1 artifact.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` | Check API responsiveness; returns `{"status": "ok"}`. |
-| POST | `/train` | Train and evaluate a model, then log it to MLflow. |
-| POST | `/predict` | Return a real prediction using the configured fitted pipeline. |
+| POST | `/train` | Verify versioned data, train, register and conditionally select a champion. |
+| POST | `/predict` | Predict using the current champion and record its concrete version. |
 
 Successful requests return HTTP `200`. Invalid request bodies return `422`.
 Handled operational failures return `503` or `500`; see the
@@ -367,13 +385,23 @@ Handled operational failures return `503` or `500`; see the
 
 ## Running tests and quality checks
 
-The focused API and service tests do not require the real CSV, a configured
-`MODEL_URI`, or a running MLflow server. They use controlled service/model
+The focused API and service tests do not require the real CSV, an existing
+champion, or a running MLflow server. They use controlled service/model
 results and temporary synthetic data.
 
 ```powershell
-python -m pytest tests/unit/test_api.py tests/unit/test_api_services.py tests/unit/test_prediction_store.py -v
+python -m pytest tests/unit/test_api.py tests/unit/test_api_services.py tests/unit/test_api_schemas.py tests/unit/test_prediction_store.py -v
 ```
+
+Run API/Registry integration tests with real temporary MLflow storage:
+
+```powershell
+python -m pytest tests/integration/test_api_registry_integration.py -v
+```
+
+These tests exercise model artifacts, actual alias changes, selection and
+prediction events. They replace the DVC training entrypoint with controlled
+training data; real DVC restoration is covered by the separate lineage tests.
 
 Run the complete test suite after making the original CSV available:
 
@@ -397,20 +425,20 @@ and make sure it uses the intended Python interpreter.
 
 ## Current scope and remaining work
 
-Real training, MLflow model logging, model loading/cache, real prediction,
-input validation, and basic HTTP error handling are implemented. Local
-Swagger calls have demonstrated successful training, artifact loading,
-and a real prediction. Automated tests verify the API and service behavior
-with isolated data and controlled external calls; a passing unit test does
-not by itself establish end-to-end MLflow availability.
+The API now integrates verified DVC training, Registry registration and audited
+champion selection. Prediction resolves the champion per request and caches
+concrete model versions. Responses and persistent events identify the model
+actually used. Prediction export and historical snapshots remain available.
 
-Persistent prediction request/result storage and its tests are now implemented.
-Prediction JSON artifact export, historical selection, retry bookkeeping,
-and automated artifact download verification are implemented. Final Task 4.1
-review should include the local command against the shared development backend,
-the latest repository-wide quality checks, and a reviewed PR.
-Model Registry activation, automated retraining, monitoring, and Docker
-deployment belong to later integration/infrastructure work.
+Unit and isolated Registry integration tests cover promotion, rejection, alias
+changes, missing champions, backend errors and consistent event versions.
+They do not establish that a shared remote backend or the full deployment is
+healthy. Run the complete quality checks in the prepared project environment
+and review CI before merging.
+
+Docker Compose, live drift input, scheduled monitoring and automated retraining
+remain subsequent integration tasks. Training can change the champion now;
+drift-triggered automatic training has not been connected yet.
 
 For request fields, response formats, defaults, and validation rules,
 see the [API contract](docs/api_contract.md).

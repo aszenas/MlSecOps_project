@@ -18,8 +18,30 @@ TRAINING_EXAMPLE = {
     "random_state": 42,
 }
 
-# not the final version of the schema, but a first draft to get the API up and running with moch data.
-# The final version will be based on the final model features and types
+PREDICTION_RESPONSE_EXAMPLE = {
+    "prediction": 0,
+    "probability": 0.1,
+    "model_version": "2",
+    "mode": "real",
+}
+
+TRAINING_RESPONSE_EXAMPLE = {
+    "status": "completed",
+    "training_run_id": "example-run-id",
+    "model_type": "gradient_boosting",
+    "model_uri": "models:/m-example-candidate",
+    "metrics": {
+        "accuracy": 0.95, "precision": 0.8, "recall": 0.75,
+        "f1": 0.77, "roc_auc": 0.9, "average_precision": 0.85,
+    },
+    "mode": "real",
+    "registered_model_name": "predictive-maintenance-model",
+    "registered_version": "2",
+    "champion_version": "2",
+    "champion_version_before": "1",
+    "promoted": True,
+    "selection_reason": "higher_f1",
+}
 
 
 class PredictionRequest(BaseModel):
@@ -37,6 +59,8 @@ class PredictionRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [PREDICTION_RESPONSE_EXAMPLE]})
+
     prediction: Literal[0, 1]
     probability: float = Field(ge=0, le=1, allow_inf_nan=False)
     model_version: str
@@ -65,6 +89,8 @@ class TrainingResponse(BaseModel):
 
 class RegistryTrainingResponse(TrainingResponse):
     """Report the candidate separately from the selected champion."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [TRAINING_RESPONSE_EXAMPLE]})
 
     registered_model_name: str = Field(min_length=1)
     registered_version: str = Field(pattern=r"^[1-9][0-9]*$")
