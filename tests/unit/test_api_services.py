@@ -7,6 +7,8 @@ from sklearn.pipeline import Pipeline
 
 import pytest
 import pandas as pd
+from mlflow.exceptions import MlflowException
+from mlflow.protos.databricks_pb2 import RESOURCE_DOES_NOT_EXIST, PERMISSION_DENIED
 
 from predictive_maintenance.api import services
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
@@ -368,3 +370,30 @@ def test_prediction_cache_follows_concrete_champion_versions(
         "models:/predictive-maintenance-model/2",
         "models:/predictive-maintenance-model/1",
     ]
+
+
+def test_missing_champion_does_not_reuse_a_previously_loaded_model(
+    prediction_request: PredictionRequest,
+    prediction_setup: tuple[MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, loader = prediction_setup
+    services.predict_pipeline(prediction_request)
+    lookup = MagicMock(side_effect=MlflowException("Missing alias", error_code=RESOURCE_DOES_NOT_EXIST))
+    monkeypatch.setattr(services, "get_champion_version", lookup)
+
+    with pytest.raises(services.ChampionNotFoundError, match="No champion model"):
+        services.predict_pipeline(prediction_request)
+
+    assert loader.call_count == 1
+    model.predict_proba.assert_called_once()
+
+
+def test_registry_backend_failure_is_not_reported_as_a_missing_champion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = MlflowException("Private authorization details", error_code=PERMISSION_DENIED)
+    monkeypatch.setattr(services, "get_champion_version", MagicMock(side_effect=error))
+    with pytest.raises(MlflowException) as captured:
+        services.resolve_champion_version("http://mlflow.test:5000")
+    assert captured.value is error

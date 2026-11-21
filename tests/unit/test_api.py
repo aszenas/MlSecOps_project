@@ -12,6 +12,7 @@ from mlflow.exceptions import MlflowException
 
 from predictive_maintenance.api import routes
 from predictive_maintenance.api.main import app
+from predictive_maintenance.api.services import ChampionNotFoundError
 from predictive_maintenance.api.schemas import PredictionResponse
 from predictive_maintenance.models.training_registry import TrainingRegistryResult
 from predictive_maintenance.models.model_selection import SelectionResult
@@ -357,6 +358,11 @@ def test_train_handles_service_errors(
             RuntimeError,
             503,
             "The prediction model is unavailable.",
+        ),
+        (
+            ChampionNotFoundError,
+            503,
+            "No champion model is available.",
         ),
         (
             OSError,

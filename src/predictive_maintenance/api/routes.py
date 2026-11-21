@@ -7,7 +7,9 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Response
 from mlflow.exceptions import MlflowException
 
-from predictive_maintenance.api.services import PROJECT_ROOT, predict_pipeline, train_pipeline
+from predictive_maintenance.api.services import (
+    PROJECT_ROOT, ChampionNotFoundError, predict_pipeline, train_pipeline,
+)
 from predictive_maintenance.monitoring.prediction_store import save_prediction_event
 from predictive_maintenance.models.model_registry import REGISTERED_MODEL_NAME, CHAMPION_ALIAS
 from predictive_maintenance.api.schemas import (
@@ -55,7 +57,11 @@ def predict(data: PredictionRequest, response: Response) -> PredictionResponse:
     try:
         result = predict_pipeline(data)
     except (MlflowException, RuntimeError, OSError) as exc:
-        detail = "The prediction model is unavailable."
+        detail = (
+            "No champion model is available."
+            if isinstance(exc, ChampionNotFoundError)
+            else "The prediction model is unavailable."
+        )
         event.update(status="error", http_status=503, error=detail)
         _persist_prediction_event(request_id, event)
         raise HTTPException(

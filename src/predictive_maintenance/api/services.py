@@ -8,6 +8,7 @@ from pathlib import Path
 
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
+from mlflow.exceptions import MlflowException
 from sklearn.pipeline import Pipeline
 import numpy as np
 import pandas as pd
@@ -21,6 +22,10 @@ from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+class ChampionNotFoundError(RuntimeError):
+    """Indicate that the Registry has no champion available for serving."""
 
 
 def get_training_repository_root() -> Path:
@@ -59,10 +64,15 @@ def train_pipeline(
 
 def resolve_champion_version(tracking_uri: str) -> str:
     """Resolve the mutable alias using the API's explicit Registry backend."""
-    version = get_champion_version(
-        registered_model_name=REGISTERED_MODEL_NAME,
-        tracking_uri=tracking_uri,
-    )
+    try:
+        version = get_champion_version(
+            registered_model_name=REGISTERED_MODEL_NAME,
+            tracking_uri=tracking_uri,
+        )
+    except MlflowException as exc:
+        if exc.error_code == "RESOURCE_DOES_NOT_EXIST":
+            raise ChampionNotFoundError("No champion model is available.") from exc
+        raise
     if not version.isascii() or not version.isdecimal() or int(version) < 1:
         raise ValueError("The Registry returned an invalid champion version.")
     return version
