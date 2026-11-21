@@ -19,6 +19,7 @@ def workflow(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
         "set_champion_version",
         "MlflowClient",
         "log_dataset_lineage",
+        "log_split_manifest",
     )
     mocks = {name: MagicMock() for name in names}
     for name, mocked in mocks.items():
@@ -105,3 +106,63 @@ def test_default_does_not_require_lineage(
         MagicMock(), "xgboost", tracking_uri="sqlite:///test.db"
     )
     workflow["log_dataset_lineage"].assert_not_called()
+
+
+def test_manifest_is_logged_before_selection(
+    workflow: dict[str, MagicMock],
+) -> None:
+    timeline = MagicMock()
+    timeline.attach_mock(workflow["log_dataset_lineage"], "lineage")
+    timeline.attach_mock(workflow["log_split_manifest"], "manifest")
+    timeline.attach_mock(
+        workflow["evaluate_and_select_champion"], "selection"
+    )
+    splits = MagicMock()
+
+    training_registry.train_register_and_select(
+        splits,
+        "xgboost",
+        tracking_uri="sqlite:///test.db",
+        dataset_lineage=DatasetLineage("dataset"),
+        record_split_manifest=True,
+    )
+
+    client = workflow["MlflowClient"].return_value
+    workflow["log_split_manifest"].assert_called_once_with(
+        client, "run-123", splits
+    )
+    assert [entry[0] for entry in timeline.mock_calls] == [
+        "lineage", "manifest", "selection",
+    ]
+
+
+def test_manifest_failure_prevents_selection_and_promotion(
+    workflow: dict[str, MagicMock],
+) -> None:
+    workflow["log_split_manifest"].side_effect = RuntimeError(
+        "manifest logging failed"
+    )
+
+    with pytest.raises(RuntimeError, match="manifest logging failed"):
+        training_registry.train_register_and_select(
+            MagicMock(),
+            "xgboost",
+            tracking_uri="sqlite:///test.db",
+            dataset_lineage=DatasetLineage("dataset"),
+            record_split_manifest=True,
+        )
+
+    workflow["evaluate_and_select_champion"].assert_not_called()
+    workflow["set_champion_version"].assert_not_called()
+
+
+def test_default_does_not_log_split_manifest(
+    workflow: dict[str, MagicMock],
+) -> None:
+    training_registry.train_register_and_select(
+        MagicMock(),
+        "xgboost",
+        tracking_uri="sqlite:///test.db",
+    )
+
+    workflow["log_split_manifest"].assert_not_called()

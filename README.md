@@ -390,6 +390,10 @@ see the [API contract](docs/api_contract.md).
 For Evidently report generation, drift rules, outputs, and validation,
 see the [monitoring documentation](docs/monitoring.md).
 
+## DVC–MLflow training lineage
+
+For verified dataset versions, reproducible training commands and split
+manifests, see the [DVC–MLflow integration guide](docs/dvc_mlflow_lineage.md).
 ## Docker
 
 For API image build, startup, health checks, and cleanup,
