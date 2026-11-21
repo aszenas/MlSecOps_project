@@ -5,12 +5,13 @@ from unittest.mock import MagicMock
 from collections.abc import Iterator
 from sklearn.pipeline import Pipeline
 
-import pandas as pd
 import pytest
+import pandas as pd
 
 from predictive_maintenance.api import services
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
-from predictive_maintenance.data.splitting import DataSplits
+from predictive_maintenance.models.training_registry import TrainingRegistryResult
+from predictive_maintenance.models.model_selection import SelectionResult
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.api.schemas import PredictionRequest
 
@@ -104,109 +105,60 @@ def test_train_pipeline_rejects_invalid_settings_before_loading_data(
     value: str,
     message: str,
 ) -> None:
-    load_data = MagicMock()
     training = MagicMock()
     monkeypatch.setenv(setting, value)
-    monkeypatch.setattr(services, "load_raw_data", load_data)
-    monkeypatch.setattr(services, "run_training_experiment", training)
+    monkeypatch.setattr(services, "train_from_dvc", training)
 
     with pytest.raises(ValueError, match=message):
         services.train_pipeline()
 
-    load_data.assert_not_called()
     training.assert_not_called()
 
 
 @pytest.fixture
-def training_csv(tmp_path: Path) -> Path:
-    """Create an isolated initial dataset without using repository data."""
-    data = pd.DataFrame(
-        {
-            "UDI": range(1, 5001),
-            "Product ID": [f"L{index:05d}" for index in range(5000)],
-            "Type": ["L"] * 5000,
-            "Air temperature [K]": [300.0] * 5000,
-            "Process temperature [K]": [310.0] * 5000,
-            "Rotational speed [rpm]": [1500] * 5000,
-            "Torque [Nm]": [40.0] * 5000,
-            "Tool wear [min]": [100] * 5000,
-            "Target": [0] * 4800 + [1] * 200,
-            "Failure Type": ["No Failure"] * 4800 + ["Power Failure"] * 200,
-        }
+def training_result() -> TrainingRegistryResult:
+    return TrainingRegistryResult(
+        run_id="service-test-run", model_uri="models:/m-candidate",
+        registered_model_name="predictive-maintenance-model", registered_version="2",
+        selection=SelectionResult(
+            promoted=True, reason="higher_f1", selected_version="2",
+            challenger_version="2", champion_version_before="1",
+            challenger_metrics={"f1": 0.8, "recall": 0.8},
+            champion_metrics={"f1": 0.7, "recall": 0.8},
+        ),
     )
-
-    path = tmp_path / "data" / "raw" / "predictive_maintenance_5000.csv"
-    path.parent.mkdir(parents=True)
-    data.to_csv(path, index=False)
-    return path
 
 
 @pytest.mark.parametrize("model_type", ["gradient_boosting", "xgboost"])
 @pytest.mark.parametrize("tracking_uri", [None, "http://mlflow.test:5000"])
-def test_train_pipeline_prepares_data_and_calls_training(
-    training_csv: Path,
+def test_train_pipeline_delegates_to_verified_registry_training(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     model_type: ModelType,
     tracking_uri: str | None,
+    training_result: TrainingRegistryResult,
 ) -> None:
-    expected_result: dict[str, object] = {
-        "run_id": "service-test-run",
-        "model_type": model_type,
-        "model_uri": "models:/service-test-model",
-        "metrics": {"f1": 0.8},
-    }
-    training = MagicMock(return_value=expected_result)
-
-    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(training_csv.parents[2]))
+    training = MagicMock(return_value=training_result)
+    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(tmp_path))
     if tracking_uri is not None:
         monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
-    monkeypatch.setattr(services, "run_training_experiment", training)
+    monkeypatch.setattr(services, "train_from_dvc", training)
 
-    result = services.train_pipeline(model_type=model_type)
-
-    assert result == expected_result
-    training.assert_called_once()
-    assert training.call_args is not None
-    assert training.call_args.kwargs["model_type"] == model_type
-    assert training.call_args.kwargs["tracking_uri"] == (
-        tracking_uri or "http://127.0.0.1:5000"
+    assert services.train_pipeline(model_type) is training_result
+    training.assert_called_once_with(
+        repository_root=tmp_path.resolve(), model_type=model_type,
+        tracking_uri=tracking_uri or "http://127.0.0.1:5000",
     )
 
-    splits: DataSplits = training.call_args.kwargs["splits"]
 
-    assert list(splits.X_train.columns) == list(FEATURE_COLUMNS)
-    assert len(splits.X_train) == 3000
-    assert len(splits.X_validation) == 750
-    assert len(splits.X_future) == 750
-    assert len(splits.X_test) == 500
-
-    all_indexes = set().union(
-        splits.X_train.index,
-        splits.X_validation.index,
-        splits.X_future.index,
-        splits.X_test.index,
-    )
-    assert len(all_indexes) == 5000
-
-    for partition in ("train", "validation", "future", "test"):
-        features = getattr(splits, f"X_{partition}")
-        target = getattr(splits, f"y_{partition}")
-        assert features.index.equals(target.index)
-
-
-def test_train_pipeline_rejects_missing_dataset(
-    tmp_path: Path,
+def test_train_pipeline_preserves_missing_dataset_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    training = MagicMock()
-
-    monkeypatch.setenv("TRAINING_REPOSITORY_ROOT", str(tmp_path))
-    monkeypatch.setattr(services, "run_training_experiment", training)
-
-    with pytest.raises(FileNotFoundError, match="Data file not found"):
+    training = MagicMock(side_effect=FileNotFoundError("Missing dataset"))
+    monkeypatch.setattr(services, "train_from_dvc", training)
+    with pytest.raises(FileNotFoundError, match="Missing dataset"):
         services.train_pipeline()
-
-    training.assert_not_called()
+    training.assert_called_once()
 
 
 def test_load_prediction_model_reuses_cached_pipeline(

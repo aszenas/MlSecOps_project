@@ -13,6 +13,8 @@ from mlflow.exceptions import MlflowException
 from predictive_maintenance.api import routes
 from predictive_maintenance.api.main import app
 from predictive_maintenance.api.schemas import PredictionResponse
+from predictive_maintenance.models.training_registry import TrainingRegistryResult
+from predictive_maintenance.models.model_selection import SelectionResult
 
 client = TestClient(app)
 
@@ -48,21 +50,19 @@ def prediction_data() -> dict[str, str | float]:
 @pytest.fixture(autouse=True)
 def mock_training(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace training during API tests to avoid external side effects."""
-    training = MagicMock(
-        return_value={
-            "run_id": "test-run-123",
-            "model_type": "gradient_boosting",
-            "model_uri": "models:/test-model",
-            "metrics": {
-                "accuracy": 0.95,
-                "precision": 0.80,
-                "recall": 0.75,
-                "f1": 0.77,
-                "roc_auc": 0.90,
-                "average_precision": 0.85,
+    training = MagicMock(return_value=TrainingRegistryResult(
+        run_id="test-run-123", model_uri="models:/test-model",
+        registered_model_name="predictive-maintenance-model", registered_version="2",
+        selection=SelectionResult(
+            promoted=True, reason="higher_f1", selected_version="2",
+            challenger_version="2", champion_version_before="1",
+            challenger_metrics={
+                "accuracy": 0.95, "precision": 0.80, "recall": 0.75,
+                "f1": 0.77, "roc_auc": 0.90, "average_precision": 0.85,
             },
-        }
-    )
+            champion_metrics={"f1": 0.7, "recall": 0.75},
+        ),
+    ))
     monkeypatch.setattr(routes, "train_pipeline", training)
     return training
 
@@ -202,8 +202,6 @@ def test_train_returns_training_result(
     model_type: str,
     mock_training: MagicMock,
 ) -> None:
-    mock_training.return_value["model_type"] = model_type
-
     response = client.post(
         "/train",
         json={
@@ -219,7 +217,13 @@ def test_train_returns_training_result(
         "training_run_id": "test-run-123",
         "model_type": model_type,
         "model_uri": "models:/test-model",
-        "metrics": mock_training.return_value["metrics"],
+        "metrics": mock_training.return_value.selection.challenger_metrics,
+        "registered_model_name": "predictive-maintenance-model",
+        "registered_version": "2",
+        "champion_version": "2",
+        "champion_version_before": "1",
+        "promoted": True,
+        "selection_reason": "higher_f1",
         "mode": "real",
     }
     mock_training.assert_called_once_with(model_type=model_type)

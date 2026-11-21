@@ -13,7 +13,7 @@ from predictive_maintenance.api.schemas import (
     PredictionRequest,
     PredictionResponse,
     TrainingRequest,
-    TrainingResponse,
+    RegistryTrainingResponse,
 )
 
 
@@ -83,8 +83,8 @@ def predict(data: PredictionRequest, response: Response) -> PredictionResponse:
     return result
 
 
-@router.post("/train", response_model=TrainingResponse)
-def train(data: TrainingRequest) -> TrainingResponse:
+@router.post("/train", response_model=RegistryTrainingResponse)
+def train(data: TrainingRequest) -> RegistryTrainingResponse:
     try:
         result = train_pipeline(model_type=data.model_type)
     except FileNotFoundError as exc:
@@ -103,13 +103,17 @@ def train(data: TrainingRequest) -> TrainingResponse:
             detail="Training failed because of invalid data or configuration.",
         ) from exc
 
-    return TrainingResponse.model_validate(
-        {
-            "status": "completed",
-            "training_run_id": result["run_id"],
-            "model_type": result["model_type"],
-            "model_uri": result["model_uri"],
-            "metrics": result["metrics"],
-            "mode": "real",
-        }
+    return RegistryTrainingResponse(
+        status="completed",
+        training_run_id=result.run_id,
+        model_type=data.model_type,
+        model_uri=result.model_uri,
+        metrics=result.selection.challenger_metrics,
+        mode="real",
+        registered_model_name=result.registered_model_name,
+        registered_version=result.registered_version,
+        champion_version=result.selection.selected_version,
+        champion_version_before=result.selection.champion_version_before,
+        promoted=result.selection.promoted,
+        selection_reason=result.selection.reason,
     )

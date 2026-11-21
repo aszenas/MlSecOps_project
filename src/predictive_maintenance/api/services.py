@@ -12,10 +12,8 @@ from sklearn.pipeline import Pipeline
 import numpy as np
 import pandas as pd
 
-from predictive_maintenance.data.loader import load_raw_data
-from predictive_maintenance.data.preprocessing import DataProcessor
-from predictive_maintenance.data.splitting import create_initial_data_splits
-from predictive_maintenance.models.mlflow_tracking import run_training_experiment
+from predictive_maintenance.models.dvc_training import train_from_dvc
+from predictive_maintenance.models.training_registry import TrainingRegistryResult
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.api.schemas import PredictionRequest, PredictionResponse
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
@@ -48,23 +46,11 @@ def get_tracking_uri() -> str:
 
 def train_pipeline(
     model_type: ModelType = "gradient_boosting",
-) -> dict[str, object]:
-    """Train and log a model using the initial dataset and fixed splits."""
+) -> TrainingRegistryResult:
+    """Verify versioned data, train and select the Registry champion."""
     tracking_uri = get_tracking_uri()
-    dataset_path = (
-        get_training_repository_root()
-        / "data" / "raw" / "predictive_maintenance_5000.csv"
-    )
-    raw_data = load_raw_data(dataset_path)
-
-    processor = DataProcessor()
-    normalized_data = processor.rename_columns(raw_data)
-    features, target = processor.split_features_target(normalized_data)
-
-    splits = create_initial_data_splits(features, target)
-
-    return run_training_experiment(
-        splits=splits,
+    return train_from_dvc(
+        repository_root=get_training_repository_root(),
         model_type=model_type,
         tracking_uri=tracking_uri,
     )
