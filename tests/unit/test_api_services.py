@@ -8,7 +8,7 @@ from sklearn.pipeline import Pipeline
 import pytest
 import pandas as pd
 from mlflow.exceptions import MlflowException
-from mlflow.protos.databricks_pb2 import RESOURCE_DOES_NOT_EXIST, PERMISSION_DENIED
+from mlflow.protos.databricks_pb2 import RESOURCE_DOES_NOT_EXIST, INVALID_PARAMETER_VALUE, PERMISSION_DENIED
 
 from predictive_maintenance.api import services
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
@@ -48,8 +48,9 @@ def prediction_setup(
 
 
 @pytest.fixture(autouse=True)
-def clear_model_cache() -> Iterator[None]:
+def clear_model_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep cached models isolated between tests."""
+    monkeypatch.setattr(services.mlflow, "set_registry_uri", MagicMock())
     clear_cache = services.load_prediction_model.cache_clear
     clear_cache()
     yield
@@ -209,6 +210,8 @@ def test_load_prediction_model_reuses_cached_pipeline(
     assert second is model
     loader.assert_called_once_with("models:/m-test-model")
     configure_tracking.assert_called_once_with("http://127.0.0.1:5000")
+    assert isinstance(services.mlflow.set_registry_uri, MagicMock)
+    services.mlflow.set_registry_uri.assert_called_once_with("http://127.0.0.1:5000")
 
 
 def test_load_prediction_model_rejects_non_pipeline(
@@ -372,14 +375,16 @@ def test_prediction_cache_follows_concrete_champion_versions(
     ]
 
 
+@pytest.mark.parametrize("error_code", [RESOURCE_DOES_NOT_EXIST, INVALID_PARAMETER_VALUE])
 def test_missing_champion_does_not_reuse_a_previously_loaded_model(
     prediction_request: PredictionRequest,
     prediction_setup: tuple[MagicMock, MagicMock],
     monkeypatch: pytest.MonkeyPatch,
+    error_code: int,
 ) -> None:
     model, loader = prediction_setup
     services.predict_pipeline(prediction_request)
-    lookup = MagicMock(side_effect=MlflowException("Missing alias", error_code=RESOURCE_DOES_NOT_EXIST))
+    lookup = MagicMock(side_effect=MlflowException("Missing alias", error_code=error_code))
     monkeypatch.setattr(services, "get_champion_version", lookup)
 
     with pytest.raises(services.ChampionNotFoundError, match="No champion model"):

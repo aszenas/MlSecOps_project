@@ -2,6 +2,7 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -239,6 +240,37 @@ def test_train_accepts_empty_object(mock_training: MagicMock) -> None:
     assert response.json()["status"] == "completed"
     assert response.json()["model_type"] == "gradient_boosting"
     mock_training.assert_called_once_with(model_type="gradient_boosting")
+
+
+@pytest.mark.parametrize("champion", ["1", None])
+def test_rejected_training_is_completed_without_claiming_a_promotion(
+    mock_training: MagicMock, champion: str | None,
+) -> None:
+    original = mock_training.return_value
+    mock_training.return_value = replace(
+        original,
+        selection=replace(
+            original.selection, promoted=False, selected_version=champion,
+            champion_version_before=champion, reason="recall_below_minimum",
+        ),
+    )
+    response = client.post("/train", json={})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "completed"
+    assert result["registered_version"] == "2"
+    assert result["champion_version"] == champion
+    assert result["promoted"] is False
+    assert result["selection_reason"] == "recall_below_minimum"
+
+
+@pytest.mark.parametrize("setting", ["tracking_uri", "repository_root"])
+def test_training_request_cannot_override_server_configuration(
+    setting: str, mock_training: MagicMock,
+) -> None:
+    response = client.post("/train", json={setting: "untrusted-value"})
+    assert response.status_code == 422
+    mock_training.assert_not_called()
 
 
 def test_train_rejects_missing_body() -> None:

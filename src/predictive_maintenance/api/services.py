@@ -70,7 +70,7 @@ def resolve_champion_version(tracking_uri: str) -> str:
             tracking_uri=tracking_uri,
         )
     except MlflowException as exc:
-        if exc.error_code == "RESOURCE_DOES_NOT_EXIST":
+        if exc.error_code in {"RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE"}:
             raise ChampionNotFoundError("No champion model is available.") from exc
         raise
     if not version.isascii() or not version.isdecimal() or int(version) < 1:
@@ -85,6 +85,7 @@ def load_prediction_model(
 ) -> Pipeline:
     """Load and cache a trusted preprocessing and classifier pipeline."""
     mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_registry_uri(tracking_uri)
     model = mlflow_sklearn.load_model(model_uri)
 
     if not isinstance(model, Pipeline):
