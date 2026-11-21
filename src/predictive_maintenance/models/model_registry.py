@@ -52,12 +52,13 @@ def set_champion_version(
 
 def get_champion_version(
     registered_model_name: str = REGISTERED_MODEL_NAME,
+    tracking_uri: str | None = None,
 ) -> str:
     """Return the model version currently assigned to champion."""
     if not registered_model_name or not registered_model_name.strip():
         raise ValueError("Registered model name must not be empty.")
 
-    client = MlflowClient()
+    client = MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
     model_version = client.get_model_version_by_alias(
         name=registered_model_name,
         alias=CHAMPION_ALIAS,

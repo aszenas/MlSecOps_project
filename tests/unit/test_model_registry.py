@@ -135,6 +135,17 @@ def test_get_champion_rejects_blank_model_name(
         model_registry.get_champion_version(model_name)
 
 
+def test_get_champion_uses_explicit_backend(
+    registry_mocks: dict[str, MagicMock],
+) -> None:
+    factory = registry_mocks["client_factory"]
+    factory.return_value.get_model_version_by_alias.return_value.version = 3
+    assert model_registry.get_champion_version(tracking_uri="http://registry.test:5000") == "3"
+    factory.assert_called_once_with(
+        tracking_uri="http://registry.test:5000", registry_uri="http://registry.test:5000",
+    )
+
+
 def test_load_champion_model(
     registry_mocks: dict[str, MagicMock],
 ) -> None:

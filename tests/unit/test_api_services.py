@@ -161,6 +161,25 @@ def test_train_pipeline_preserves_missing_dataset_error(
     training.assert_called_once()
 
 
+def test_resolve_champion_uses_explicit_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup = MagicMock(return_value="7")
+    monkeypatch.setattr(services, "get_champion_version", lookup)
+    assert services.resolve_champion_version("http://mlflow.test:5000") == "7"
+    lookup.assert_called_once_with(
+        registered_model_name=services.REGISTERED_MODEL_NAME,
+        tracking_uri="http://mlflow.test:5000",
+    )
+
+
+@pytest.mark.parametrize("version", ["", "0", "-1", "m-model", "champion", "١"])
+def test_resolve_champion_rejects_invalid_versions(
+    monkeypatch: pytest.MonkeyPatch, version: str,
+) -> None:
+    monkeypatch.setattr(services, "get_champion_version", MagicMock(return_value=version))
+    with pytest.raises(ValueError, match="invalid champion version"):
+        services.resolve_champion_version("http://mlflow.test:5000")
+
+
 def test_load_prediction_model_reuses_cached_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

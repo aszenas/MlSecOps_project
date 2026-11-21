@@ -14,6 +14,7 @@ import pandas as pd
 
 from predictive_maintenance.models.dvc_training import train_from_dvc
 from predictive_maintenance.models.training_registry import TrainingRegistryResult
+from predictive_maintenance.models.model_registry import REGISTERED_MODEL_NAME, get_champion_version
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.api.schemas import PredictionRequest, PredictionResponse
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
@@ -54,6 +55,17 @@ def train_pipeline(
         model_type=model_type,
         tracking_uri=tracking_uri,
     )
+
+
+def resolve_champion_version(tracking_uri: str) -> str:
+    """Resolve the mutable alias using the API's explicit Registry backend."""
+    version = get_champion_version(
+        registered_model_name=REGISTERED_MODEL_NAME,
+        tracking_uri=tracking_uri,
+    )
+    if not version.isascii() or not version.isdecimal() or int(version) < 1:
+        raise ValueError("The Registry returned an invalid champion version.")
+    return version
 
 
 @lru_cache(maxsize=1)
