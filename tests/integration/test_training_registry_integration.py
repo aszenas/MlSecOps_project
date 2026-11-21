@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import hashlib
 import json
 from pathlib import Path
+from typing import cast
 import shutil
 import subprocess
 import sys
@@ -17,11 +18,15 @@ from sklearn.pipeline import Pipeline
 
 from predictive_maintenance.data.loader import load_raw_data
 from predictive_maintenance.data.preprocessing import DataProcessor
-from predictive_maintenance.data.provenance import verify_dvc_dataset
+from predictive_maintenance.data.provenance import (
+    verify_dvc_dataset,
+    verify_dvc_training_file,
+)
 from predictive_maintenance.data.split_manifest import build_split_manifest
 from predictive_maintenance.data.splitting import (
     DataSplits,
     create_initial_data_splits,
+    create_retraining_data_splits,
 )
 from predictive_maintenance.models.data_lineage import DatasetLineage
 from predictive_maintenance.models.dvc_lineage import INITIAL_SPLIT_VERSION
@@ -310,6 +315,15 @@ def versioned_dvc_repository(tmp_path: Path) -> tuple[Path, str]:
         project_root / "data/raw/predictive_maintenance_5000.csv",
         raw_directory / "predictive_maintenance_5000.csv",
     )
+    training_path = Path("data/processed/training/train_v2.csv")
+    raw = load_raw_data(raw_directory / "predictive_maintenance_5000.csv")
+    processor = DataProcessor()
+    features, target = processor.split_features_target(processor.rename_columns(raw))
+    v1 = create_initial_data_splits(features, target)
+    v2 = create_retraining_data_splits(v1, cast(pd.Series, raw["UDI"]))
+    (seed / training_path).parent.mkdir(parents=True)
+    raw.loc[v2.X_train.index].to_csv(seed / training_path, index=False, lineterminator="\n")
+    training_pointer = training_path.with_suffix(".csv.dvc").as_posix()
     (seed / ".gitignore").write_text(
         "__pycache__/\n*.pyc\n",
         encoding="utf-8",
@@ -325,13 +339,13 @@ def versioned_dvc_repository(tmp_path: Path) -> tuple[Path, str]:
         seed, "git", "config", "core.hooksPath", str(tmp_path / "empty-hooks")
     )
     run_repository_command(seed, sys.executable, "-m", "dvc", "init")
-    run_repository_command(seed, sys.executable, "-m", "dvc", "add", "data/raw")
+    run_repository_command(seed, sys.executable, "-m", "dvc", "add", "data/raw", training_path.as_posix())
     run_repository_command(
         seed, sys.executable, "-m", "dvc",
         "remote", "add", "-d", "test-local", str(remote),
     )
     run_repository_command(
-        seed, sys.executable, "-m", "dvc", "push", "data/raw.dvc"
+        seed, sys.executable, "-m", "dvc", "push", "data/raw.dvc", training_pointer
     )
     run_repository_command(seed, "git", "add", ".")
     run_repository_command(
@@ -344,11 +358,13 @@ def versioned_dvc_repository(tmp_path: Path) -> tuple[Path, str]:
     )
     dataset = workspace / "data/raw/predictive_maintenance_5000.csv"
     assert not dataset.exists()
+    assert not (workspace / training_path).exists()
 
     run_repository_command(
-        workspace, sys.executable, "-m", "dvc", "pull", "data/raw.dvc"
+        workspace, sys.executable, "-m", "dvc", "pull", "data/raw.dvc", training_pointer
     )
     assert dataset.is_file()
+    assert (workspace / training_path).is_file()
     assert run_repository_command(
         workspace, "git", "status", "--porcelain"
     ) == ""
@@ -434,3 +450,50 @@ def test_modified_dvc_dataset_prevents_training(
     experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
     assert experiment is not None
     assert not client.search_runs([experiment.experiment_id])
+
+
+def test_dvc_v2_retraining_preserves_evaluation_and_logs_training_file(
+    isolated_mlflow: str,
+    versioned_dvc_repository: tuple[Path, str],
+) -> None:
+    """Run both versions and verify which rows and DVC data MLflow recorded."""
+    repository, commit = versioned_dvc_repository
+    v1 = train_from_dvc(repository, tracking_uri=isolated_mlflow)
+    v2 = train_from_dvc(repository, tracking_uri=isolated_mlflow, dataset_version="v2")
+
+    client = MlflowClient(tracking_uri=isolated_mlflow, registry_uri=isolated_mlflow)
+    run = client.get_run(v2.run_id)
+    assert run.data.params["train_size"] == "3010"
+    assert run.data.tags["dataset_git_commit"] == commit
+    assert run.data.tags["dataset_dvc_hash"] == verify_dvc_dataset(repository)
+    training_hash = verify_dvc_training_file(repository)
+    assert run.data.tags["dataset_training_dvc_hash"] == training_hash
+    assert run.data.tags["dataset_split_version"] != INITIAL_SPLIT_VERSION
+
+    metadata_path = client.download_artifacts(v2.run_id, "lineage/dataset_metadata.json")
+    metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+    assert metadata["training_dvc_hash"] == training_hash
+    assert metadata["split_rows"] == {"train": 3010, "validation": 750, "future": 740, "test": 500}
+
+    manifest_path = "lineage/split_manifest.json"
+    v1_manifest = json.loads(Path(client.download_artifacts(v1.run_id, manifest_path)).read_text(encoding="utf-8"))
+    v2_manifest = json.loads(Path(client.download_artifacts(v2.run_id, manifest_path)).read_text(encoding="utf-8"))
+    v1_rows = v1_manifest["row_indices"]
+    v2_rows = v2_manifest["row_indices"]
+    assert v2_rows["validation"] == v1_rows["validation"]
+    assert v2_rows["test"] == v1_rows["test"]
+    assert v2_rows["train"][:3000] == v1_rows["train"]
+
+    training_csv = load_raw_data(repository / "data/processed/training/train_v2.csv")
+    raw = load_raw_data(repository / "data/raw/predictive_maintenance_5000.csv")
+    expected_udis = cast(pd.Series, raw.loc[v2_rows["train"], "UDI"])
+    actual_udis = cast(pd.Series, training_csv["UDI"])
+    assert actual_udis.tolist() == expected_udis.tolist()
+
+    moved = v2_rows["train"][3000:]
+    assert len(moved) == 10
+    assert v2_rows["future"] == [index for index in v1_rows["future"] if index not in moved]
+
+    version = client.get_model_version(REGISTERED_MODEL_NAME, v2.registered_version)
+    assert version.tags["training_run_id"] == v2.run_id
+    assert run.data.tags["selection_reason"] == v2.selection.reason
