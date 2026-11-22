@@ -152,6 +152,7 @@ jobs:
           python -m pyright
 
       - name: Upload test and coverage reports
+        id: upload_reports
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
@@ -169,6 +170,8 @@ jobs:
 
       - name: Write Python QA job summary
         if: ${{ always() }}
+        env:
+          ARTIFACT_UPLOAD_OUTCOME: ${{ steps.upload_reports.outcome }}
         run: |
           status_label() {
             if [ ! -f "$1" ]; then
@@ -192,22 +195,47 @@ jobs:
             value=$(awk '/^TOTAL/ {value=$NF} END {if (value) print value; else print "not available"}' "$1")
             if [ -n "$value" ]; then printf '%s' "$value"; else printf 'not available'; fi
           }
+          coverage_completeness() {
+            for status_file in \
+              ci-results/unit.status \
+              ci-results/mlflow.status \
+              ci-results/integration.status; do
+              if [ ! -f "$status_file" ] || [ "$(cut -d= -f2 "$status_file")" != "0" ]; then
+                printf 'partial'
+                return
+              fi
+            done
+            printf 'complete'
+          }
+          coverage_scope=$(coverage_completeness)
+          if [ "$ARTIFACT_UPLOAD_OUTCOME" = "success" ]; then
+            artifact_result='available after successful upload'
+          else
+            artifact_result="unavailable (upload ${ARTIFACT_UPLOAD_OUTCOME:-not run})"
+          fi
           {
             echo '## Python QA reports'
+            echo
+            echo "Coverage completeness: **$coverage_scope** (all three test groups must pass for a complete result)."
+            echo "Artifact status: **$artifact_result**."
             echo
             echo '| Check | Result | Coverage |'
             echo '| --- | --- | --- |'
             echo "| Unit tests | $(status_label ci-results/unit.status) | — |"
             echo "| MLflow integration tests | $(status_label ci-results/mlflow.status) | — |"
             echo "| Other integration tests | $(status_label ci-results/integration.status) | — |"
-            echo "| Source coverage gate | $(status_label ci-results/coverage-source.status) | $(coverage_value reports/coverage-source.txt) |"
-            echo "| Source + tests coverage gate | $(status_label ci-results/coverage-combined.status) | $(coverage_value reports/coverage-combined.txt) |"
+            echo "| Source coverage gate | $(status_label ci-results/coverage-source.status) [$coverage_scope] | $(coverage_value reports/coverage-source.txt) |"
+            echo "| Source + tests coverage gate | $(status_label ci-results/coverage-combined.status) [$coverage_scope] | $(coverage_value reports/coverage-combined.txt) |"
             echo
-            echo 'Reports are available in the python-qa-reports-${{ github.run_id }} artifact:'
-            echo '- JUnit XML: reports/junit-unit.xml, reports/junit-mlflow.xml, reports/junit-integration.xml'
-            echo '- Coverage text: reports/coverage-source.txt and reports/coverage-combined.txt'
-            echo '- Coverage XML: reports/coverage.xml'
-            echo '- Browsable HTML coverage: reports/coverage-html/'
+            if [ "$ARTIFACT_UPLOAD_OUTCOME" = "success" ]; then
+              echo 'Reports are available in the python-qa-reports-${{ github.run_id }} artifact:'
+              echo '- JUnit XML: reports/junit-unit.xml, reports/junit-mlflow.xml, reports/junit-integration.xml'
+              echo '- Coverage text: reports/coverage-source.txt and reports/coverage-combined.txt'
+              echo '- Coverage XML: reports/coverage.xml'
+              echo '- Browsable HTML coverage: reports/coverage-html/'
+            else
+              echo 'Reports were not published as an artifact because the upload did not complete successfully.'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
 

@@ -87,13 +87,10 @@ Local documentation and repository checks are separate from GitHub Actions.
 The current workflow is [`python-qa.yml`](../.github/workflows/python-qa.yml).
 No remote run and no uploaded artifact for the workflow revision containing
 the report-publication changes was inspected in this record, so GitHub CI is
-not marked successful here.
-
-Two workflow follow-ups remain open: a coverage file produced after an
-incomplete test sequence is not explicitly labelled as partial in the job
-summary, and the summary names the upload artifact without independently
-proving that the remote upload succeeded. The workflow was not changed in
-this documentation commit.
+not marked successful here. The workflow now labels coverage as `partial`
+unless all three test groups pass, and reports artifact availability only
+when the upload step succeeds. A remote run is still needed to verify those
+paths and the resulting artifact in GitHub.
 
 The record is therefore evidence for the submission restore and the recorded
 local monitoring scenarios, not a claim that the complete project is
