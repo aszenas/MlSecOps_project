@@ -5,7 +5,13 @@ import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+import argparse
+import subprocess
+from tempfile import TemporaryDirectory
 
+from mlflow import MlflowClient
+from mlflow.artifacts import download_artifacts
+from mlflow.exceptions import MlflowException
 
 API_URL = "http://127.0.0.1:8000"
 MLFLOW_URL = "http://127.0.0.1:5000"
@@ -125,5 +131,127 @@ def main() -> int:
     return 1
 
 
+def read_saved_event(request_id: str) -> dict[str, object]:
+    """Read an existing prediction event without modifying its database."""
+    code = """
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+uri = Path(os.environ["PREDICTION_LOG_DB"]).as_uri() + "?mode=ro"
+with sqlite3.connect(uri, uri=True) as connection:
+    row = connection.execute(
+        "SELECT payload FROM prediction_events WHERE request_id = ?",
+        (sys.argv[1],),
+    ).fetchone()
+print(row[0] if row else "null")
+"""
+    result = subprocess.run(
+        [
+            "docker", "compose", "exec", "-T", "api",
+            "python", "-c", code, request_id,
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    event = json.loads(result.stdout)
+
+    if not isinstance(event, dict):
+        raise RuntimeError("The saved prediction event was not found.")
+
+    return event
+
+
+def verify_persistence() -> int:
+    """Verify previously saved records after container recreation."""
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        training = state["training"]
+        saved_prediction = state["prediction"]
+        request_id = str(state["request_id"])
+
+        check_health("API", f"{API_URL}/health")
+        check_health("MLflow", f"{MLFLOW_URL}/health")
+        check_health("Streamlit", f"{STREAMLIT_URL}/_stcore/health")
+
+        client = MlflowClient(
+            tracking_uri=MLFLOW_URL,
+            registry_uri=MLFLOW_URL,
+        )
+        model_name = str(training["registered_model_name"])
+
+        client.get_run(str(training["training_run_id"]))
+        client.get_model_version(
+            model_name,
+            str(training["registered_version"]),
+        )
+        champion = client.get_model_version_by_alias(model_name, "champion")
+
+        if str(champion.version) != saved_prediction["model_version"]:
+            raise RuntimeError("The champion changed or was not preserved.")
+
+        print("MLflow run and Registry versions: OK")
+
+        with TemporaryDirectory(prefix="mlsecops-compose-") as directory:
+            model_path = download_artifacts(
+                artifact_uri=str(training["model_uri"]),
+                dst_path=directory,
+                tracking_uri=MLFLOW_URL,
+                registry_uri=MLFLOW_URL,
+            )
+            if not (Path(model_path) / "MLmodel").is_file():
+                raise RuntimeError("The saved model artifact is incomplete.")
+
+        print("Model artifact download: OK")
+
+        event = read_saved_event(request_id)
+        expected = {
+            "request_id": request_id,
+            "status": "success",
+            **saved_prediction,
+        }
+
+        if {key: event.get(key) for key in expected} != expected:
+            raise RuntimeError("The saved prediction event changed.")
+
+        print("Saved prediction event: OK")
+
+        current_prediction, _ = post_json("/predict", PREDICTION_INPUT)
+        for key in ("mode", "model_version", "prediction"):
+            if current_prediction.get(key) != saved_prediction.get(key):
+                raise RuntimeError("Prediction changed after recreation.")
+
+        print("Champion serving after recreation: OK")
+        print("Persistence check: OK")
+        return 0
+
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        MlflowException,
+        subprocess.SubprocessError,
+    ) as exc:
+        detail = (
+            exc.stderr or str(exc)
+            if isinstance(exc, subprocess.CalledProcessError)
+            else str(exc)
+        )
+        print(f"Persistence check failed: {detail}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verify-persistence", action="store_true")
+    arguments = parser.parse_args()
+
+    raise SystemExit(
+        verify_persistence() if arguments.verify_persistence else main()
+    )
