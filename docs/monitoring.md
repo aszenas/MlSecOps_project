@@ -5,6 +5,9 @@
 Compare reference and current model input distributions, inspect data quality,
 and export reports for later dashboard and retraining integration.
 
+The recorded clean-clone and Streamlit–Evidently evidence is summarized in the
+[data and monitoring verification record](verification_record.md).
+
 The component currently runs on file-based data. It does not consume live API
 logs or automatically retrain or promote models.
 

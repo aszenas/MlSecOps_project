@@ -6,6 +6,9 @@ that export. It documents the actual interfaces and identifiers in the
 feature/data-release-qa revision; it does not turn the submission export into
 a retraining dataset.
 
+For the concise evidence record covering the clean-clone restore, see the
+[data and monitoring verification record](verification_record.md).
+
 ## Dataset roles
 
 | Artifact | DVC metadata | Role |
