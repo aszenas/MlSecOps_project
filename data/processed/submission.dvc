@@ -1,0 +1,6 @@
+outs:
+- md5: 737d57f421900bc799f3a3997e3a4f06.dir
+  size: 704667
+  nfiles: 2
+  hash: md5
+  path: submission
