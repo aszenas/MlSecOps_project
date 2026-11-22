@@ -9,6 +9,12 @@ from predictive_maintenance.monitoring.dashboard_data import (
     MonitoringDashboardData,
     load_monitoring_dashboard_data,
 )
+from predictive_maintenance.monitoring.dashboard_operational_data import (
+    ChampionDashboardData,
+    RetrainingDashboardData,
+    load_champion_dashboard_data,
+    load_retraining_dashboard_data,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -114,6 +120,50 @@ def _render_reference_metadata(data: MonitoringDashboardData) -> None:
                 st.code(value, language="text")
 
 
+def _render_champion_status(data: ChampionDashboardData) -> None:
+    """Render the read-only Registry alias result."""
+    st.subheader("Champion model")
+    if data.status == "ready":
+        st.success(f"Champion version: {data.version}")
+        st.caption(f"Model: {data.model_name}")
+        st.caption(f"Queried at (UTC): {data.queried_at}")
+    elif data.status == "not_found":
+        st.warning(data.error or "No champion alias is available.")
+    elif data.status == "not_configured":
+        st.info(data.error or "The MLflow Registry is not configured.")
+    else:
+        st.error(data.error or "The MLflow Registry is unavailable.")
+
+
+def _render_retraining_status(data: RetrainingDashboardData) -> None:
+    """Render the latest recorded training-selection audit result."""
+    st.subheader("Retraining status")
+    if data.status == "ready" and data.record is not None:
+        record = data.record
+        st.info(f"Recorded result: {record.result}")
+        st.caption(f"Run time (UTC): {record.completed_at}")
+        st.caption(f"Run ID: {record.run_id}")
+        st.caption(f"Challenger version: {record.challenger_version}")
+        st.caption(f"Promotion decision: {record.promotion_decision}")
+        if record.selection_reason is not None:
+            st.caption(f"Selection reason: {record.selection_reason}")
+    elif data.status == "not_configured":
+        st.info(data.error or "Retraining data is not configured.")
+    elif data.status == "no_data":
+        st.info("No recorded retraining result is available.")
+    else:
+        st.error(data.error or "The retraining record is unavailable.")
+
+
+def _render_operational_status(
+    champion: ChampionDashboardData,
+    retraining: RetrainingDashboardData,
+) -> None:
+    """Render operational sources independently from monitoring data."""
+    _render_champion_status(champion)
+    _render_retraining_status(retraining)
+
+
 def _render_status(data: MonitoringDashboardData) -> None:
     _render_drift_status(data)
     _render_runtime_data(data)
@@ -163,7 +213,16 @@ def main() -> None:
             status="unavailable",
             error=f"The monitoring data could not be read: {exc}",
         )
+    try:
+        champion = load_champion_dashboard_data()
+    except Exception as exc:
+        champion = ChampionDashboardData(status="unavailable", error=str(exc))
+    try:
+        retraining = load_retraining_dashboard_data()
+    except Exception as exc:
+        retraining = RetrainingDashboardData(status="unavailable", error=str(exc))
     _render_status(data)
+    _render_operational_status(champion, retraining)
 
 
 if __name__ == "__main__":

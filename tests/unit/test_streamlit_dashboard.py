@@ -5,6 +5,8 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
+from predictive_maintenance.monitoring import dashboard_operational_data
+
 
 APP_PATH = Path(__file__).resolve().parents[2] / "app" / "streamlit_dashboard.py"
 
@@ -207,3 +209,69 @@ def test_refresh_does_not_keep_previous_report(
     assert not app.exception
     assert app.warning[0].value == "The latest monitoring run has insufficient data."
     assert not app.get("iframe")
+
+
+def test_dashboard_renders_operational_sources_independently(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_champion_dashboard_data",
+        lambda: dashboard_operational_data.ChampionDashboardData(
+            status="ready",
+            model_name="predictive-maintenance-model",
+            version="9",
+            queried_at="2026-01-01T00:00:00+00:00",
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_retraining_dashboard_data",
+        lambda: dashboard_operational_data.RetrainingDashboardData(
+            status="unavailable",
+            error="backend offline",
+        ),
+    )
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert not app.exception
+    assert any("Champion version: 9" in item.value for item in app.success)
+    assert any("backend offline" in item.value for item in app.error)
+
+
+def test_dashboard_renders_missing_champion_and_recorded_retraining(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_champion_dashboard_data",
+        lambda: dashboard_operational_data.ChampionDashboardData(
+            status="not_found", error="No champion model is available."
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_retraining_dashboard_data",
+        lambda: dashboard_operational_data.RetrainingDashboardData(
+            status="ready",
+            record=dashboard_operational_data.RetrainingRecord(
+                run_id="run-1",
+                completed_at="2026-01-01T00:00:00+00:00",
+                result="rejected",
+                challenger_version="4",
+                promotion_decision="not_promoted",
+            ),
+        ),
+    )
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert not app.exception
+    assert any("No champion model is available." in item.value for item in app.warning)
+    assert any("Recorded result: rejected" in item.value for item in app.info)
+    assert any("Promotion decision: not_promoted" in item.value for item in app.caption)
