@@ -217,6 +217,8 @@ def _load_ready_state(
     if not isinstance(state.get("drift_decision"), bool):
         raise ValueError("ready must contain a boolean drift_decision.")
     summary = _validate_summary(state.get("drift_summary"))
+    if state["drift_decision"] != summary["threshold_reached"]:
+        raise ValueError("State and summary drift decisions are inconsistent.")
     if state.get("drifted_columns") != summary["drifted_columns"]:
         raise ValueError("State and summary drifted columns are inconsistent.")
 

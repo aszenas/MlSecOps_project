@@ -20,8 +20,8 @@ includes Streamlit 1.67.0, Evidently 0.7.23 and MLflow 3.17.2.
 From the repository root in PowerShell:
 
 ```powershell
-\.venv\Scripts\python.exe -m pip install -r requirements.txt
-\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip check
 ```
 
 Set the source import path and the monitoring report directory before starting
@@ -36,7 +36,7 @@ $env:MONITORING_REPORT_DIR = (Resolve-Path .\artifacts\monitoring-demo\normal\re
 Start the dashboard from the repository root:
 
 ```powershell
-\.venv\Scripts\python.exe -m streamlit run .\app\streamlit_dashboard.py
+.\.venv\Scripts\python.exe -m streamlit run .\app\streamlit_dashboard.py
 ```
 
 Open [http://localhost:8501](http://localhost:8501). Stop the process with
@@ -94,7 +94,7 @@ initial 3,000-row training reference. Ensure the dataset exists and is clean:
 
 ```powershell
 $env:PYTHONPATH = (Resolve-Path .\src).Path
-\.venv\Scripts\python.exe -m dvc status data/raw.dvc --json
+.\.venv\Scripts\python.exe -m dvc status data/raw.dvc --json
 ```
 
 If the CSV is absent, restore it using the repository's configured DVC
@@ -108,7 +108,7 @@ mixing with the demonstration:
 
 ```powershell
 $demoRoot = Join-Path $env:TEMP ("mlsecops-monitoring-demo-" + [guid]::NewGuid())
-\.venv\Scripts\python.exe .\scripts\run_persisted_monitoring_demo.py `
+.\.venv\Scripts\python.exe .\scripts\run_persisted_monitoring_demo.py `
   --repository-root (Get-Location).Path `
   --output-root $demoRoot
 ```
@@ -144,7 +144,7 @@ scenario, point the dashboard at its report directory and restart Streamlit:
 
 ```powershell
 $env:MONITORING_REPORT_DIR = (Resolve-Path "$demoRoot\normal\reports").Path
-\.venv\Scripts\python.exe -m streamlit run .\app\streamlit_dashboard.py
+.\.venv\Scripts\python.exe -m streamlit run .\app\streamlit_dashboard.py
 ```
 
 Stop it with `Ctrl+C`, then repeat with `shifted\reports` or
