@@ -76,14 +76,15 @@ services:
     ports:
       - "127.0.0.1:8501:8501"
     environment:
-      REPORTS_DIR: /app/reports
+      MONITORING_REPORT_DIR: /app/reports/monitoring
+      MLFLOW_TRACKING_URI: http://mlflow:5000
     volumes:
       - reports_data:/app/reports:ro
     depends_on:
       api:
         condition: service_healthy
     command: >-
-      python -m streamlit run /app/app/placeholder.py
+      python -m streamlit run /app/app/streamlit_dashboard.py
       --server.address 0.0.0.0
       --server.port 8501
       --server.headless true
