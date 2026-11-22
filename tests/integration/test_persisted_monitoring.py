@@ -101,10 +101,15 @@ def test_monitoring_pipeline_publishes_drift_free_report_for_reference_sample(
     assert summary == state["drift_summary"]
     assert summary["threshold_reached"] is False
     assert state["reports"] == {
-        "html": str(result.html_path),
-        "json": str(result.json_path),
-        "summary": str(result.summary_path),
+        "html": result.html_path.relative_to(output_dir).as_posix(),
+        "json": result.json_path.relative_to(output_dir).as_posix(),
+        "summary": result.summary_path.relative_to(output_dir).as_posix(),
     }
+    reports = cast(dict[str, object], state["reports"])
+    assert all(
+        isinstance(path, str) and Path(path).parts[0] == "runs"
+        for path in reports.values()
+    )
 
 
 def test_monitoring_pipeline_detects_shifted_persisted_sample(
@@ -142,7 +147,7 @@ def test_monitoring_pipeline_detects_shifted_persisted_sample(
     assert summary["threshold_reached"] is True
 
 
-def test_monitoring_pipeline_filters_events_and_clears_previous_report(
+def test_monitoring_pipeline_filters_events_and_preserves_previous_report(
     tmp_path: Path,
     monitoring_reference: MonitoringReferenceResult,
 ) -> None:
@@ -160,6 +165,11 @@ def test_monitoring_pipeline_filters_events_and_clears_previous_report(
     )
     assert first.status == "ready"
     assert first.html_path is not None and first.html_path.is_file()
+    first_report_bytes = {
+        path: path.read_bytes()
+        for path in (first.html_path, first.json_path, first.summary_path)
+        if path is not None
+    }
 
     database_path = tmp_path / "rerun" / "filtered.sqlite"
     valid_row = monitoring_reference.dataframe.iloc[[0]]
@@ -210,8 +220,6 @@ def test_monitoring_pipeline_filters_events_and_clears_previous_report(
     assert result.html_path is None
     assert result.json_path is None
     assert result.summary_path is None
-    assert not (output_dir / "report.html").exists()
-    assert not (output_dir / "report.json").exists()
-    assert not (output_dir / "summary.json").exists()
+    assert all(path.read_bytes() == content for path, content in first_report_bytes.items())
     state = _read_json(result.state_path)
     assert state["reports"] == {"html": None, "json": None, "summary": None}
