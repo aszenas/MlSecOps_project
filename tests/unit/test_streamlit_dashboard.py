@@ -9,7 +9,11 @@ from streamlit.testing.v1 import AppTest
 APP_PATH = Path(__file__).resolve().parents[2] / "app" / "streamlit_dashboard.py"
 
 
-def _state(status: str = "ready") -> dict[str, object]:
+def _state(
+    status: str = "ready",
+    *,
+    drift_decision: bool = False,
+) -> dict[str, object]:
     selected_event_count = 2 if status == "insufficient_data" else 120
     valid_current_count = 0 if status == "insufficient_data" else 120
     return {
@@ -34,16 +38,24 @@ def _state(status: str = "ready") -> dict[str, object]:
             "split_manifest_sha256": "b" * 64,
             "reference_row_hash": "c" * 64,
         },
-        "drift_decision": False if status == "ready" else None,
+        "drift_decision": drift_decision if status == "ready" else None,
         "drift_summary": {
             "column_count": 6,
-            "drifted_column_count": 0,
-            "drifted_column_share": 0.0,
+            "drifted_column_count": 3 if drift_decision else 0,
+            "drifted_column_share": 0.5 if drift_decision else 0.0,
             "drift_share_threshold": 0.5,
-            "threshold_reached": False,
-            "drifted_columns": [],
+            "threshold_reached": drift_decision,
+            "drifted_columns": (
+                ["type", "air_temperature_k", "torque_nm"]
+                if drift_decision
+                else []
+            ),
         } if status == "ready" else None,
-        "drifted_columns": [],
+        "drifted_columns": (
+            ["type", "air_temperature_k", "torque_nm"]
+            if status == "ready" and drift_decision
+            else []
+        ),
         "reports": {
             "html": "report.html" if status == "ready" else None,
             "json": "report.json" if status == "ready" else None,
@@ -52,9 +64,14 @@ def _state(status: str = "ready") -> dict[str, object]:
     }
 
 
-def _write_state(directory: Path, status: str) -> None:
+def _write_state(
+    directory: Path,
+    status: str,
+    *,
+    drift_decision: bool = False,
+) -> None:
     directory.mkdir(exist_ok=True)
-    state = _state(status)
+    state = _state(status, drift_decision=drift_decision)
     if status == "ready":
         (directory / "report.html").write_text(
             "<html><body><script>window.reportReady = true;</script></body></html>",
@@ -98,9 +115,52 @@ def test_dashboard_renders_ready_report_and_download(
     app = AppTest.from_file(APP_PATH, default_timeout=15).run()
 
     assert not app.exception
-    assert app.success[0].value == "A validated monitoring report is available."
+    assert any(
+        element.value == "A validated monitoring report is available."
+        for element in app.success
+    )
     assert app.get("iframe")
     assert app.download_button[0].label == "Download Evidently HTML report"
+    assert app.get("metric")
+    assert app.code
+    assert "data/raw.dvc" in [code.value for code in app.code]
+
+
+def test_dashboard_renders_detected_drift_and_drifted_fields(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_state(tmp_path, "ready", drift_decision=True)
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert not app.exception
+    assert app.error[0].value == "Drift detected."
+    assert any(
+        "type, air_temperature_k, torque_nm" in element.value
+        for element in app.markdown
+    )
+
+
+def test_dashboard_renders_runtime_counts_and_reference_metadata(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_state(tmp_path, "ready")
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert not app.exception
+    metric_values = {metric.label: metric.value for metric in app.metric}
+    assert metric_values["Valid current samples"] == "120"
+    assert metric_values["Minimum samples"] == "100"
+    assert metric_values["Skipped invalid records"] == "0"
+    assert metric_values["Skipped invalid feature rows"] == "0"
+    assert "2025-01-01T00:00:00Z" in app.caption[0].value
+    assert "2025-01-02T01:00:00Z" in app.caption[1].value
+    assert "a" * 32 + ".dir" in [code.value for code in app.code]
 
 
 def test_dashboard_renders_insufficient_data_without_report(
@@ -114,6 +174,7 @@ def test_dashboard_renders_insufficient_data_without_report(
 
     assert not app.exception
     assert app.warning[0].value == "The latest monitoring run has insufficient data."
+    assert any("Missing current samples: 100" in element.value for element in app.info)
     assert not app.get("iframe")
 
 
