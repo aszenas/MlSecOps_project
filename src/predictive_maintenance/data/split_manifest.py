@@ -1,6 +1,7 @@
 """Describe the exact row membership of the initial dataset splits."""
 
 import sklearn
+from typing import Literal
 
 from predictive_maintenance.data.splitting import (
     DataSplits,
@@ -9,19 +10,28 @@ from predictive_maintenance.data.splitting import (
     RANDOM_STATE,
     TRAIN_SIZE,
     VALIDATION_SIZE,
+    V2_TRAINING_UDIS,
 )
 
 
-def build_split_manifest(splits: DataSplits) -> dict[str, object]:
+DatasetVersion = Literal["v1", "v2"]
+
+
+def build_split_manifest(
+    splits: DataSplits,
+    *,
+    dataset_version: DatasetVersion = "v1",
+) -> dict[str, object]:
     """Validate split membership and return a JSON-compatible manifest."""
+    moved_rows = len(V2_TRAINING_UDIS) if dataset_version == "v2" else 0
     partitions = {
-        "train": (splits.X_train, splits.y_train, TRAIN_SIZE),
+        "train": (splits.X_train, splits.y_train, TRAIN_SIZE + moved_rows),
         "validation": (
             splits.X_validation,
             splits.y_validation,
             VALIDATION_SIZE,
         ),
-        "future": (splits.X_future, splits.y_future, FUTURE_SIZE),
+        "future": (splits.X_future, splits.y_future, FUTURE_SIZE - moved_rows),
         "test": (splits.X_test, splits.y_test, FINAL_TEST_SIZE),
     }
     row_indices: dict[str, list[int]] = {}
@@ -50,7 +60,11 @@ def build_split_manifest(splits: DataSplits) -> dict[str, object]:
 
     return {
         "schema_version": 1,
-        "split_method": "stratified-train-test-split",
+        "split_method": (
+            "stratified-split-with-future-rows-moved-to-train"
+            if dataset_version == "v2"
+            else "stratified-train-test-split"
+        ),
         "random_state": RANDOM_STATE,
         "sklearn_version": sklearn.__version__,
         "row_index_meaning": "index of the loaded source dataset",

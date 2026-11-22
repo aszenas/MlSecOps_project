@@ -1,0 +1,105 @@
+services:
+  prepare:
+    build: .
+    image: mlsecops-api:compose
+    command: ["python", "/app/scripts/prepare_compose.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in .env}
+      AWS_SECRET_ACCESS_KEY: ${DAGSHUB_TOKEN:?Set DAGSHUB_TOKEN in .env}
+    volumes:
+      - .:/source:ro
+      - training_workspace:/workspace
+
+  api:
+    build: .
+    image: mlsecops-api:compose
+    working_dir: /workspace/repository
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      PYTHONPATH: /workspace/repository/src
+      TRAINING_REPOSITORY_ROOT: /workspace/repository
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREDICTION_LOG_DB: /app/artifacts/predictions.db
+      REPORTS_DIR: /app/reports
+    volumes:
+      - training_workspace:/workspace
+      - prediction_data:/app/artifacts
+      - reports_data:/app/reports
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+  mlflow:
+    build: .
+    image: mlsecops-api:compose
+    working_dir: /home/appuser
+    volumes:
+      - mlflow_data:/home/appuser
+    ports:
+      - "127.0.0.1:5000:5000"
+    command: >-
+      python -m mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --workers 1
+      --backend-store-uri sqlite:////home/appuser/mlflow.db
+      --serve-artifacts
+      --artifacts-destination /home/appuser/mlartifacts
+      --allowed-hosts mlflow:5000,localhost:5000,127.0.0.1:5000
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 60s
+
+  streamlit:
+    build: .
+    image: mlsecops-api:compose
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      REPORTS_DIR: /app/reports
+    volumes:
+      - reports_data:/app/reports:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >-
+      python -m streamlit run /app/app/placeholder.py
+      --server.address 0.0.0.0
+      --server.port 8501
+      --server.headless true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5).close()"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+volumes:
+  mlflow_data:
+  prediction_data:
+  training_workspace:
+  reports_data:

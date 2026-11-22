@@ -52,12 +52,24 @@ def read_clean_git_commit(repository_root: Path) -> str:
 def read_dvc_directory_hash(repository_root: Path) -> str:
     """Read the raw directory identifier from data/raw.dvc."""
     metadata_path = repository_root / "data" / "raw.dvc"
+    return _read_dvc_output_hash(
+        metadata_path, "raw", r"[0-9a-f]{32}\.dir", "directory",
+    )
+
+
+def _read_dvc_output_hash(
+    metadata_path: Path,
+    output_name: str,
+    hash_pattern: str,
+    output_kind: str,
+) -> str:
+    """Read the hash for one expected output from a DVC pointer."""
     try:
         metadata = yaml.safe_load(
             metadata_path.read_text(encoding="utf-8")
         )
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise ValueError("Could not read data/raw.dvc.") from exc
+        raise ValueError(f"Could not read {metadata_path.name}.") from exc
 
     if not isinstance(metadata, dict):
         raise ValueError("DVC metadata must be a mapping.")
@@ -70,17 +82,14 @@ def read_dvc_directory_hash(repository_root: Path) -> str:
     if not isinstance(output, dict):
         raise ValueError("DVC output must be a mapping.")
 
-    if output.get("path") != "raw" or output.get("hash") != "md5":
-        raise ValueError("Expected the raw directory with MD5 hashing.")
+    if output.get("path") != output_name or output.get("hash") != "md5":
+        raise ValueError(f"Expected the {output_name} {output_kind} with MD5 hashing.")
 
-    directory_hash = output.get("md5")
-    if (
-        not isinstance(directory_hash, str)
-        or re.fullmatch(r"[0-9a-f]{32}\.dir", directory_hash) is None
-    ):
-        raise ValueError("Invalid DVC directory hash.")
+    output_hash = output.get("md5")
+    if not isinstance(output_hash, str) or re.fullmatch(hash_pattern, output_hash) is None:
+        raise ValueError(f"Invalid DVC {output_kind} hash.")
 
-    return directory_hash
+    return output_hash
 
 
 def verify_dvc_dataset(repository_root: Path) -> str:
@@ -89,19 +98,34 @@ def verify_dvc_dataset(repository_root: Path) -> str:
     dataset_path = (
         repository_root / "data" / "raw" / "predictive_maintenance_5000.csv"
     )
+    _verify_dvc_status(repository_root, "data/raw.dvc", dataset_path)
+    return directory_hash
+
+
+def verify_dvc_training_file(repository_root: Path) -> str:
+    """Verify the local v2 training CSV against its DVC pointer."""
+    pointer = "data/processed/training/train_v2.csv.dvc"
+    metadata_path = repository_root / pointer
+    dataset_path = metadata_path.with_suffix("")
+    file_hash = _read_dvc_output_hash(
+        metadata_path, dataset_path.name, r"[0-9a-f]{32}", "file",
+    )
+    _verify_dvc_status(repository_root, pointer, dataset_path)
+    return file_hash
+
+
+def _verify_dvc_status(
+    repository_root: Path,
+    pointer: str,
+    dataset_path: Path,
+) -> None:
+    """Require an available dataset with a clean DVC status."""
     if not dataset_path.is_file():
         raise ValueError("The DVC dataset is missing. Run dvc pull first.")
 
     try:
         result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "dvc",
-                "status",
-                "data/raw.dvc",
-                "--json",
-            ],
+            [sys.executable, "-m", "dvc", "status", pointer, "--json"],
             cwd=repository_root,
             capture_output=True,
             text=True,
@@ -123,5 +147,3 @@ def verify_dvc_dataset(repository_root: Path) -> str:
         raise ValueError(
             "The local DVC dataset or cache differs from the recorded state."
         )
-
-    return directory_hash

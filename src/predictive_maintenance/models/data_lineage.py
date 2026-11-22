@@ -6,8 +6,8 @@ import json
 
 from mlflow import MlflowClient
 
-from predictive_maintenance.data.split_manifest import build_split_manifest
 from predictive_maintenance.data.splitting import DataSplits
+from predictive_maintenance.data.split_manifest import DatasetVersion, build_split_manifest
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class DatasetLineage:
     dvc_hash: str | None = None
     git_commit: str | None = None
     split_version: str | None = None
+    training_dvc_hash: str | None = None
 
 
 def log_dataset_lineage(
@@ -30,13 +31,17 @@ def log_dataset_lineage(
     if not lineage.dataset_name.strip():
         raise ValueError("Dataset name must not be empty.")
 
-    for field_name in ("dvc_hash", "git_commit", "split_version"):
+    for field_name in ("dvc_hash", "git_commit", "split_version", "training_dvc_hash"):
         value = getattr(lineage, field_name)
         if value is not None and not value.strip():
             raise ValueError(f"{field_name} must not be blank.")
 
+    metadata = asdict(lineage)
+    if lineage.training_dvc_hash is None:
+        metadata.pop("training_dvc_hash")
+
     payload = {
-        **asdict(lineage),
+        **metadata,
         "split_rows": {
             "train": len(splits.X_train),
             "validation": len(splits.X_validation),
@@ -56,15 +61,19 @@ def log_dataset_lineage(
         client.set_tag(run_id, "dataset_git_commit", lineage.git_commit)
     if lineage.split_version is not None:
         client.set_tag(run_id, "dataset_split_version", lineage.split_version)
+    if lineage.training_dvc_hash is not None:
+        client.set_tag(run_id, "dataset_training_dvc_hash", lineage.training_dvc_hash)
 
 
 def log_split_manifest(
     client: MlflowClient,
     run_id: str,
     splits: DataSplits,
+    *,
+    dataset_version: DatasetVersion = "v1",
 ) -> str:
     """Log exact partition membership and return its SHA-256 identifier."""
-    manifest = build_split_manifest(splits)
+    manifest = build_split_manifest(splits, dataset_version=dataset_version)
     serialized = json.dumps(
         manifest,
         sort_keys=True,
