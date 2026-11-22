@@ -1,101 +1,108 @@
-# Docker API image
+# Docker Compose environment
 
 ## Scope
 
-The root Dockerfile builds the FastAPI application using Python 3.11.
-The image can start and serve `/health` without a dataset or model.
-Training requires the dataset and an accessible MLflow backend.
-Prediction requires an accessible Registry champion and MLflow backend,
-and a writable prediction log location.
-The complete Docker Compose environment is a separate integration task.
+The stack provides FastAPI, MLflow and a temporary Streamlit page.
+A one-shot preparation service creates a committed training checkout
+and restores its DVC-managed dataset.
 
-## Build
+The real monitoring dashboard will replace the temporary Streamlit page
+after the component handoff.
 
-Run from the repository root with Docker Desktop running in Linux container mode:
+## Prerequisites
 
-```powershell
-docker build --progress=plain -t mlsecops-api:dev .
-```
+- Docker Desktop running with Linux containers.
+- Project dependencies installed locally for the verification scripts.
+- A personal DagsHub token with access to the shared dataset.
+- Committed application-code changes before preparing a new checkout.
 
-The build installs the dependencies from requirements.txt and runs pip check.
+## Configuration
 
-## Run
+Copy `.env.example` to `.env` and set `DAGSHUB_TOKEN`.
+Keep `.env` outside Git.
 
-```powershell
-docker run -d --name mlsecops-api-check -p 127.0.0.1:8001:8000 mlsecops-api:dev
-```
+The preparation service receives the token at runtime.
+The API uses the internal MLflow address `http://mlflow:5000`.
 
-The API is available only on the local machine:
+## Startup
 
-- Health: http://127.0.0.1:8001/health
-- Swagger: http://127.0.0.1:8001/docs
-
-Check the health endpoint after the application starts:
+Run from the repository root:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8001/health
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps -a
 ```
 
-Expected health response:
+Expected states:
 
-```json
-{"status": "ok"}
-```
+- `prepare`: Exited (0).
+- `api`, `mlflow`, `streamlit`: healthy.
 
-The health endpoint confirms that the API responds. It does not verify
-model availability, dataset access, MLflow connectivity, or prediction storage.
+The preparation service runs once and exits after verification.
+Health checks indicate HTTP responsiveness.
 
-View container logs if startup fails:
+## Local addresses
+
+- Swagger: http://127.0.0.1:8000/docs
+- MLflow: http://127.0.0.1:5000
+- Streamlit: http://127.0.0.1:8501
+
+## Persistent storage
+
+- `mlflow_data`: MLflow metadata, Registry records and artifacts.
+- `prediction_data`: prediction events and export bookkeeping.
+- `training_workspace`: committed training checkout and DVC data/cache.
+- `reports_data`: shared monitoring reports.
+
+The API can write reports; Streamlit mounts the report volume read-only.
+
+The API imports source code from the prepared Git checkout.
+Refresh that checkout with the stack stopped when changing source versions.
+
+## Functional verification
+
+Once the services are healthy:
 
 ```powershell
-docker logs mlsecops-api-check
+.\.venv\Scripts\python.exe scripts/check_compose.py
 ```
 
-## Cleanup
+This creates a real training run and prediction.
+Identifiers are saved to the Git-ignored `artifacts/compose-check.json`.
+
+Then recreate containers while retaining their volumes:
 
 ```powershell
-docker stop mlsecops-api-check
-docker rm mlsecops-api-check
+docker compose down
+docker compose up -d
 ```
 
-The built image remains available.
+Once healthy, verify the saved records without retraining:
 
-## CI
+```powershell
+.\.venv\Scripts\python.exe scripts/check_compose.py --verify-persistence
+```
 
-The Python Quality Assurance workflow includes an independent Docker image
-build job. It uses the root Dockerfile and does not require DagsHub credentials.
+The check verifies the run, Registry versions, model artifact download,
+saved prediction event and continued champion serving.
 
-The job follows the workflow's existing event and branch filters.
-It verifies image construction; it does not run an API health check.
+## Troubleshooting
 
-## Validation
+```powershell
+docker compose logs --tail=100 prepare api mlflow streamlit
+```
 
-Locally verified on Windows using Docker Desktop with Linux containers:
+A failed preparation prevents API startup.
+Check the preparation log for Git, DVC or authentication failures.
 
-- Image build completed successfully.
-- Build-time pip check reported no broken requirements.
-- The container started successfully.
-- The health endpoint returned `{"status": "ok"}`.
+`docker compose down` preserves named volumes.
+Adding `-v` removes the volumes and their stored data.
 
-GitHub Actions build validation must be confirmed separately.
+## Validation status
 
-## Compose integration handoff
+Image builds, service health checks and individual storage checks
+were verified during development.
 
-The Compose configuration must provide dataset access, MLflow connectivity,
-a Registry champion, and persistent writable prediction storage. Set
-MLFLOW_TRACKING_URI to the internal MLflow service address. MODEL_URI is no
-longer used by API prediction; champion changes are observed on the next request.
-
-Verified training additionally requires DVC in the runtime Python environment,
-Git/DVC metadata and a clean training checkout with the restored CSV.
-TRAINING_REPOSITORY_ROOT can select an absolute mounted checkout path.
-The current base Dockerfile does not install DVC or provide that checkout;
-these are prerequisites for the forthcoming Compose training setup.
-
-The default prediction database is `/app/artifacts/predictions.db`.
-The current image does not prepare a writable `/app/artifacts` directory.
-Provide a directory writable by UID 10001 and configure PREDICTION_LOG_DB
-if using a different path.
-
-Container startup may take several seconds. Wait for application startup
-before checking `/health`.
+The complete functional and persistence checks must be recorded after
+successful execution. CI results must be confirmed on the pull request.
