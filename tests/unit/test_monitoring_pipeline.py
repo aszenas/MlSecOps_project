@@ -142,8 +142,14 @@ def test_insufficient_data_uses_valid_feature_count_and_skips_evidently(
     monkeypatch.setattr(pipeline, "DriftReporter", reporter)
     output_dir = tmp_path / "monitoring"
     output_dir.mkdir()
-    for filename in pipeline.REPORT_FILENAMES:
-        (output_dir / filename).write_text("old", encoding="utf-8")
+    previous_reports = {
+        filename: output_dir / filename for filename in pipeline.REPORT_FILENAMES
+    }
+    for path in previous_reports.values():
+        path.write_text("old", encoding="utf-8")
+    previous_report_bytes = {
+        path: path.read_bytes() for path in previous_reports.values()
+    }
 
     result = pipeline.run_monitoring(
         tmp_path / "repo",
@@ -163,7 +169,7 @@ def test_insufficient_data_uses_valid_feature_count_and_skips_evidently(
     assert state["drift_decision"] is None
     assert state["drift_summary"] is None
     assert state["reports"] == {"html": None, "json": None, "summary": None}
-    assert not any((output_dir / filename).exists() for filename in pipeline.REPORT_FILENAMES)
+    assert all(path.read_bytes() == content for path, content in previous_report_bytes.items())
     reporter.assert_not_called()
 
 
@@ -195,10 +201,46 @@ def test_ready_state_uses_report_summary_and_publishes_all_artifacts(
     assert state["drift_decision"] is True
     assert state["drifted_columns"] == ["type"]
     assert state["drift_summary"]["threshold_reached"] is True
-    assert all(Path(path).is_file() for path in state["reports"].values())
+    assert all(
+        (output_dir / str(path)).is_file()
+        for path in state["reports"].values()
+    )
+    assert all(not Path(path).is_absolute() for path in state["reports"].values())
     reporter.save.assert_called_once()
     assert len(reporter.save.call_args.kwargs["current"]) == 100
     assert result.to_dict() == state
+
+
+def test_successive_runs_keep_previous_reports_and_publish_new_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep published artifacts immutable when a later run succeeds."""
+    configure_pipeline(monkeypatch, valid_count=100)
+    reporter = fake_reporter()
+    monkeypatch.setattr(pipeline, "DriftReporter", lambda: reporter)
+    output_dir = tmp_path / "monitoring"
+
+    first = pipeline.run_monitoring(
+        tmp_path / "repo", tmp_path / "db", START, END, output_dir
+    )
+    first_state = read_state(output_dir)
+    first_report_bytes = {
+        path: path.read_bytes()
+        for path in (first.html_path, first.json_path, first.summary_path)
+        if path is not None
+    }
+
+    configure_pipeline(monkeypatch, valid_count=101)
+    second = pipeline.run_monitoring(
+        tmp_path / "repo", tmp_path / "db", START, END, output_dir
+    )
+    second_state = read_state(output_dir)
+
+    assert first_state["reports"] != second_state["reports"]
+    assert all(path.is_file() for path in first_report_bytes)
+    assert all(path.read_bytes() == content for path, content in first_report_bytes.items())
+    assert second.status == "ready"
 
 
 def test_rejects_invalid_pipeline_window(
@@ -244,9 +286,11 @@ def test_missing_report_artifact_is_not_published(
         pipeline.run_monitoring(tmp_path / "repo", tmp_path / "db", START, END, tmp_path / "output")
 
     assert not (tmp_path / "output" / pipeline.MONITORING_STATE_FILENAME).exists()
+    runs_dir = tmp_path / "output" / "runs"
+    assert not runs_dir.exists() or not list(runs_dir.iterdir())
 
 
-def test_insufficient_rerun_removes_previous_report_references(
+def test_insufficient_rerun_preserves_previous_reports_without_referencing_them(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -256,6 +300,11 @@ def test_insufficient_rerun_removes_previous_report_references(
     monkeypatch.setattr(pipeline, "DriftReporter", lambda: reporter)
     output_dir = tmp_path / "monitoring"
     pipeline.run_monitoring(tmp_path / "repo", tmp_path / "db", START, END, output_dir)
+    first_state = read_state(output_dir)
+    first_report_bytes = {
+        output_dir / str(path): (output_dir / str(path)).read_bytes()
+        for path in first_state["reports"].values()
+    }
 
     configure_pipeline(monkeypatch, valid_count=0)
     pipeline.run_monitoring(tmp_path / "repo", tmp_path / "db", START, END, output_dir)
@@ -264,7 +313,7 @@ def test_insufficient_rerun_removes_previous_report_references(
     assert state["status"] == "insufficient_data"
     assert state["drift_decision"] is None
     assert state["reports"] == {"html": None, "json": None, "summary": None}
-    assert not any((output_dir / filename).exists() for filename in pipeline.REPORT_FILENAMES)
+    assert all(path.read_bytes() == content for path, content in first_report_bytes.items())
     assert reporter.save.call_count == 1
 
 
@@ -304,6 +353,39 @@ def test_report_failure_propagates_without_ready_state(
     assert not (tmp_path / "output" / pipeline.MONITORING_STATE_FILENAME).exists()
 
 
+def test_report_failure_preserves_previous_state_and_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed later report generation cannot replace the current run."""
+    configure_pipeline(monkeypatch, valid_count=100)
+    reporter = fake_reporter()
+    monkeypatch.setattr(pipeline, "DriftReporter", lambda: reporter)
+    output_dir = tmp_path / "monitoring"
+    first = pipeline.run_monitoring(
+        tmp_path / "repo", tmp_path / "db", START, END, output_dir
+    )
+    state_path = output_dir / pipeline.MONITORING_STATE_FILENAME
+    previous_state = state_path.read_bytes()
+    previous_reports = {
+        path: path.read_bytes()
+        for path in (first.html_path, first.json_path, first.summary_path)
+        if path is not None
+    }
+
+    configure_pipeline(monkeypatch, valid_count=101)
+    reporter.save.side_effect = RuntimeError("report failed")
+
+    with pytest.raises(RuntimeError, match="report failed"):
+        pipeline.run_monitoring(
+            tmp_path / "repo", tmp_path / "db", START, END, output_dir
+        )
+
+    assert state_path.read_bytes() == previous_state
+    assert all(path.read_bytes() == content for path, content in previous_reports.items())
+    assert len(list((output_dir / "runs").iterdir())) == 1
+
+
 def test_failed_state_replace_leaves_no_partial_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -324,3 +406,46 @@ def test_failed_state_replace_leaves_no_partial_json(
 
     assert not state_path.exists()
     assert not list(tmp_path.glob(".monitoring_state.json.*.tmp"))
+
+
+def test_failed_state_publication_preserves_previous_state_and_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed state switch cannot expose the later run's report contents."""
+    configure_pipeline(monkeypatch, valid_count=100)
+    reporter = fake_reporter()
+    monkeypatch.setattr(pipeline, "DriftReporter", lambda: reporter)
+    output_dir = tmp_path / "monitoring"
+    first = pipeline.run_monitoring(
+        tmp_path / "repo", tmp_path / "db", START, END, output_dir
+    )
+    state_path = output_dir / pipeline.MONITORING_STATE_FILENAME
+    previous_state = state_path.read_bytes()
+    previous_reports = {
+        path: path.read_bytes()
+        for path in (first.html_path, first.json_path, first.summary_path)
+        if path is not None
+    }
+
+    configure_pipeline(monkeypatch, valid_count=101)
+    original_replace = pipeline.os.replace
+
+    def fail_state_replace(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+    ) -> None:
+        if Path(destination) == state_path:
+            raise OSError("state replace failed")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(pipeline.os, "replace", fail_state_replace)
+
+    with pytest.raises(OSError, match="state replace failed"):
+        pipeline.run_monitoring(
+            tmp_path / "repo", tmp_path / "db", START, END, output_dir
+        )
+
+    assert state_path.read_bytes() == previous_state
+    assert all(path.read_bytes() == content for path, content in previous_reports.items())
+    assert len(list((output_dir / "runs").iterdir())) == 1

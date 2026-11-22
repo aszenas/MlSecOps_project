@@ -2,7 +2,9 @@
 
 import json
 import os
+import shutil
 import tempfile
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,13 +62,27 @@ def _metadata_dict(metadata: MonitoringReferenceMetadata) -> dict[str, object]:
     return cast(dict[str, object], asdict(metadata))
 
 
-def _report_paths(output_dir: Path) -> tuple[Path, Path, Path]:
-    return tuple(output_dir / filename for filename in REPORT_FILENAMES)  # type: ignore[return-value]
+def _new_run_directory(output_dir: Path) -> Path:
+    runs_dir = output_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex}"
+    run_dir = runs_dir / run_id
+    run_dir.mkdir()
+    return run_dir
 
 
-def _remove_previous_reports(output_dir: Path) -> None:
-    for path in _report_paths(output_dir):
-        path.unlink(missing_ok=True)
+def _relative_report_paths(
+    output_dir: Path,
+    report_paths: tuple[Path, Path, Path],
+) -> dict[str, str]:
+    return {
+        key: path.relative_to(output_dir).as_posix()
+        for key, path in zip(("html", "json", "summary"), report_paths)
+    }
+
+
+def _remove_unpublished_run(run_dir: Path) -> None:
+    shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def _write_state_atomically(state: dict[str, object], state_path: Path) -> None:
@@ -130,12 +146,17 @@ def _result_from_state(
     state_path: Path,
 ) -> MonitoringRunResult:
     reports = cast(dict[str, object], state["reports"])
+    report_root = state_path.parent
+
+    def report_path(value: object) -> Path | None:
+        return report_root / value if isinstance(value, str) else None
+
     return MonitoringRunResult(
         status=cast(str, state["status"]),
         state_path=state_path,
-        html_path=Path(value) if isinstance((value := reports.get("html")), str) else None,
-        json_path=Path(value) if isinstance((value := reports.get("json")), str) else None,
-        summary_path=Path(value) if isinstance((value := reports.get("summary")), str) else None,
+        html_path=report_path(reports.get("html")),
+        json_path=report_path(reports.get("json")),
+        summary_path=report_path(reports.get("summary")),
         state=state,
     )
 
@@ -182,42 +203,33 @@ def run_monitoring(
     )
 
     if sample_result.status == "insufficient_data":
-        _remove_previous_reports(output_dir)
         _write_state_atomically(state, state_path)
         return _result_from_state(state, state_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(tempfile.mkdtemp(prefix=".monitoring-report-", dir=output_dir))
+    run_dir = _new_run_directory(output_dir)
+    published = False
     try:
         staged_html, staged_json = DriftReporter().save(
             reference=reference_result.dataframe,
             current=feature_result.dataframe,
-            output_dir=staging_dir,
+            output_dir=run_dir,
         )
         staged_summary = staged_json.with_name("summary.json")
         summary = summarize_report(staged_json)
         if not staged_html.is_file() or not staged_json.is_file() or not staged_summary.is_file():
             raise RuntimeError("The monitoring report did not produce all required artifacts.")
 
-        final_html, final_json, final_summary = _report_paths(output_dir)
-        for source, destination in (
-            (staged_html, final_html),
-            (staged_json, final_json),
-            (staged_summary, final_summary),
-        ):
-            os.replace(source, destination)
-
         state["drift_decision"] = summary["threshold_reached"]
         state["drift_summary"] = summary
         state["drifted_columns"] = summary["drifted_columns"]
+        report_paths = (staged_html, staged_json, staged_summary)
         state["reports"] = {
-            "html": str(final_html),
-            "json": str(final_json),
-            "summary": str(final_summary),
+            **_relative_report_paths(output_dir, report_paths),
         }
         _write_state_atomically(state, state_path)
+        published = True
         return _result_from_state(state, state_path)
     finally:
-        for path in staging_dir.iterdir():
-            path.unlink(missing_ok=True)
-        staging_dir.rmdir()
+        if not published:
+            _remove_unpublished_run(run_dir)

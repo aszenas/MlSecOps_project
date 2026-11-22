@@ -97,8 +97,13 @@ reports/baseline/
 reports/simulated_drift/
 ```
 
-Generated reports are Git-ignored and overwritten when the demonstration runs
-again.
+Generated reports are Git-ignored. Monitoring runs publish their artifacts in
+unique `reports/monitoring/runs/<run-id>/` directories, so a later run never
+overwrites a previously published report. The current
+`reports/monitoring/monitoring_state.json` file is atomically replaced only
+after all artifacts for the new run have been written successfully. An
+`insufficient_data` state has null report paths and does not delete earlier
+published runs.
 
 Summary fields:
 
