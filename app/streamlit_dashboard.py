@@ -31,7 +31,23 @@ def _render_status(data: MonitoringDashboardData) -> None:
     elif data.status == "insufficient_data":
         st.warning("The latest monitoring run has insufficient data.")
     elif data.status == "ready":
+        if data.html is None:
+            st.error("The validated monitoring report content is unavailable.")
+            return
         st.success("A validated monitoring report is available.")
+        st.download_button(
+            "Download Evidently HTML report",
+            data=data.html,
+            file_name="report.html",
+            mime="text/html",
+            on_click="ignore",
+        )
+        st.iframe(
+            data.html,
+            width="stretch",
+            height=800,
+            alt="Evidently monitoring report",
+        )
     else:
         message = data.error or "The monitoring data is temporarily unavailable."
         st.error(f"Monitoring data unavailable: {message}")
