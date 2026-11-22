@@ -150,7 +150,7 @@ def test_train_pipeline_delegates_to_verified_registry_training(
     assert services.train_pipeline(model_type) is training_result
     training.assert_called_once_with(
         repository_root=tmp_path.resolve(), model_type=model_type,
-        tracking_uri=tracking_uri or "http://127.0.0.1:5000",
+        tracking_uri=tracking_uri or "http://127.0.0.1:5000", dataset_version="v1",
     )
 
 

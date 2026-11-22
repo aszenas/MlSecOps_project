@@ -19,7 +19,7 @@ from predictive_maintenance.models.model_registry import REGISTERED_MODEL_NAME, 
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.api.schemas import PredictionRequest, PredictionResponse
 from predictive_maintenance.data.preprocessing import FEATURE_COLUMNS
-
+from predictive_maintenance.data.split_manifest import DatasetVersion
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -52,6 +52,8 @@ def get_tracking_uri() -> str:
 
 def train_pipeline(
     model_type: ModelType = "gradient_boosting",
+    *,
+    dataset_version: DatasetVersion = "v1",
 ) -> TrainingRegistryResult:
     """Verify versioned data, train and select the Registry champion."""
     tracking_uri = get_tracking_uri()
@@ -59,6 +61,7 @@ def train_pipeline(
         repository_root=get_training_repository_root(),
         model_type=model_type,
         tracking_uri=tracking_uri,
+        dataset_version=dataset_version,
     )
 
 
