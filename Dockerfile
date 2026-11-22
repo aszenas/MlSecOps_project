@@ -15,7 +15,8 @@ COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir --no-compile -r requirements.txt \
     && python -m pip check
 
-RUN useradd --create-home --uid 10001 appuser
+RUN useradd --create-home --uid 10001 appuser \
+    && install -d -o appuser -g appuser /app/artifacts
 
 COPY --chown=appuser:appuser src/ ./src/
 

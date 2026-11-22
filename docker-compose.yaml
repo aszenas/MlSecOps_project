@@ -6,6 +6,9 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREDICTION_LOG_DB: /app/artifacts/predictions.db
+    volumes:
+      - prediction_data:/app/artifacts
     depends_on:
       - mlflow
 
@@ -26,5 +29,6 @@ services:
       --serve-artifacts
       --artifacts-destination /home/appuser/mlartifacts
       --allowed-hosts mlflow:5000,localhost:5000,127.0.0.1:5000
-  volumes:
-    mlflow_data:
+volumes:
+  mlflow_data:
+  prediction_data:
