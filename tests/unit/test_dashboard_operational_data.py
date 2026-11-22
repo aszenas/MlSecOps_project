@@ -118,6 +118,120 @@ def test_retraining_missing_experiment_is_not_success(monkeypatch) -> None:
     assert result.record is None
 
 
+def test_retraining_ignores_runs_without_audit_tags(monkeypatch) -> None:
+    monkeypatch.setenv(module.TRACKING_URI_ENV, "sqlite:///test.db")
+    unrelated = SimpleNamespace(
+        info=SimpleNamespace(run_id="other-run", start_time=2, end_time=2),
+        data=SimpleNamespace(tags={"stage": "baseline"}),
+    )
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def get_experiment_by_name(self, _name: str):
+            return SimpleNamespace(experiment_id="experiment-1")
+
+        def search_runs(self, **kwargs):
+            assert kwargs["experiment_ids"] == ["experiment-1"]
+            assert kwargs["order_by"] == ["attributes.start_time DESC"]
+            return [unrelated]
+
+    monkeypatch.setattr(module, "MlflowClient", Client)
+
+    result = module.load_retraining_dashboard_data()
+
+    assert result.status == "no_data"
+    assert result.record is None
+
+
+def test_retraining_ignores_later_non_audit_run(monkeypatch) -> None:
+    monkeypatch.setenv(module.TRACKING_URI_ENV, "sqlite:///test.db")
+    unrelated = SimpleNamespace(
+        info=SimpleNamespace(run_id="other-run", start_time=3, end_time=3),
+        data=SimpleNamespace(tags={"stage": "baseline"}),
+    )
+    valid = _run(run_id="audit-run", version="6")
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def get_experiment_by_name(self, _name: str):
+            return SimpleNamespace(experiment_id="experiment-1")
+
+        def search_runs(self, **_kwargs):
+            return [unrelated, valid]
+
+    monkeypatch.setattr(module, "MlflowClient", Client)
+
+    result = module.load_retraining_dashboard_data()
+
+    assert result.status == "ready"
+    assert result.record is not None
+    assert result.record.run_id == "audit-run"
+
+
+def test_retraining_skips_incomplete_latest_audit_and_uses_older_valid_one(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(module.TRACKING_URI_ENV, "sqlite:///test.db")
+    incomplete = _run(run_id="incomplete")
+    incomplete.data.tags.pop("promotion_status")
+    valid = _run(run_id="valid", version="6")
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def get_experiment_by_name(self, _name: str):
+            return SimpleNamespace(experiment_id="experiment-1")
+
+        def search_runs(self, **_kwargs):
+            return [incomplete, valid]
+
+    monkeypatch.setattr(module, "MlflowClient", Client)
+
+    result = module.load_retraining_dashboard_data()
+
+    assert result.status == "ready"
+    assert result.record is not None
+    assert result.record.run_id == "valid"
+
+
+def test_retraining_invalid_audit_data_is_not_success(monkeypatch) -> None:
+    monkeypatch.setenv(module.TRACKING_URI_ENV, "sqlite:///test.db")
+    invalid = _run()
+    invalid.info.end_time = 10**30
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def get_experiment_by_name(self, _name: str):
+            return SimpleNamespace(experiment_id="experiment-1")
+
+        def search_runs(self, **_kwargs):
+            return [invalid]
+
+    monkeypatch.setattr(module, "MlflowClient", Client)
+
+    result = module.load_retraining_dashboard_data()
+
+    assert result.status == "no_data"
+    assert result.record is None
+
+
+def test_champion_version_is_read_from_alias_not_retraining_record(monkeypatch) -> None:
+    monkeypatch.setenv(module.TRACKING_URI_ENV, "sqlite:///test.db")
+    monkeypatch.setattr(module, "resolve_champion_version", lambda _uri: "5")
+
+    result = module.load_champion_dashboard_data()
+
+    assert result.status == "ready"
+    assert result.version == "5"
+
+
 def test_retraining_backend_failure_is_unavailable(monkeypatch) -> None:
     monkeypatch.setenv(module.TRACKING_URI_ENV, "http://mlflow.test:5000")
 

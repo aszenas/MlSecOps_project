@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from predictive_maintenance.monitoring.dashboard_data import (
     load_monitoring_dashboard_data,
 )
@@ -258,3 +260,107 @@ def test_report_path_escape_is_unavailable(tmp_path: Path) -> None:
 
     assert result.status == "unavailable"
     assert result.error
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schema_version", 999),
+        ("minimum_samples", "100"),
+        ("valid_current_count", True),
+        ("reports", []),
+    ),
+)
+def test_invalid_state_schema_or_field_types_are_unavailable(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    _write_ready_reports(tmp_path)
+    state = _state()
+    state[field] = value
+    (tmp_path / "monitoring_state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+
+    result = load_monitoring_dashboard_data(tmp_path)
+
+    assert result.status == "unavailable"
+    assert result.state is None
+    assert result.error
+
+
+@pytest.mark.parametrize(
+    "report_name",
+    ("report.json", "summary.json"),
+)
+def test_missing_or_corrupt_referenced_json_is_unavailable(
+    tmp_path: Path,
+    report_name: str,
+) -> None:
+    _write_ready_reports(tmp_path)
+    path = tmp_path / report_name
+    path.unlink()
+    if report_name == "report.json":
+        path.write_text("{", encoding="utf-8")
+
+    result = load_monitoring_dashboard_data(tmp_path)
+
+    assert result.status == "unavailable"
+    assert result.error
+
+
+def test_unreadable_referenced_html_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_ready_reports(tmp_path)
+    original_read_text = Path.read_text
+
+    def read_text(path: Path, *args, **kwargs) -> str:
+        if path.name == "report.html":
+            raise OSError("report is temporarily unavailable")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    result = load_monitoring_dashboard_data(tmp_path)
+
+    assert result.status == "unavailable"
+    assert result.error
+
+
+def test_dashboard_loader_state_transitions_do_not_retain_old_result(
+    tmp_path: Path,
+) -> None:
+    _write_ready_reports(tmp_path, marker="first")
+    first = load_monitoring_dashboard_data(tmp_path)
+    assert first.status == "ready"
+
+    (tmp_path / "report.html").unlink()
+    unavailable = load_monitoring_dashboard_data(tmp_path)
+    assert unavailable.status == "unavailable"
+    assert unavailable.html is None
+
+    state = _state("insufficient_data")
+    state.update({
+        "selected_event_count": 0,
+        "valid_current_count": 0,
+        "missing_current_count": 100,
+        "drift_decision": None,
+        "drift_summary": None,
+        "reports": {"html": None, "json": None, "summary": None},
+    })
+    (tmp_path / "monitoring_state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+    insufficient = load_monitoring_dashboard_data(tmp_path)
+    assert insufficient.status == "insufficient_data"
+    assert insufficient.html is None
+
+    _write_ready_reports(tmp_path, marker="second", drift_decision=True)
+    ready_again = load_monitoring_dashboard_data(tmp_path)
+    assert ready_again.status == "ready"
+    assert ready_again.html == "<html>second</html>"
+    assert ready_again.state is not None
+    assert ready_again.state["drift_decision"] is True

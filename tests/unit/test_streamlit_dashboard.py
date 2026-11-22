@@ -194,7 +194,7 @@ def test_dashboard_renders_unavailable_without_report(
     assert not app.get("iframe")
 
 
-def test_refresh_does_not_keep_previous_report(
+def test_refresh_does_not_keep_previous_report_or_status(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -209,6 +209,19 @@ def test_refresh_does_not_keep_previous_report(
     assert not app.exception
     assert app.warning[0].value == "The latest monitoring run has insufficient data."
     assert not app.get("iframe")
+
+    _write_state(tmp_path, "ready", drift_decision=True)
+    app.run()
+    assert app.get("iframe")
+
+    (tmp_path / "report.html").unlink()
+    app.run()
+    assert any("Monitoring data unavailable:" in item.value for item in app.error)
+    assert not app.get("iframe")
+
+    _write_state(tmp_path, "ready")
+    app.run()
+    assert app.get("iframe")
 
 
 def test_dashboard_renders_operational_sources_independently(
@@ -275,3 +288,96 @@ def test_dashboard_renders_missing_champion_and_recorded_retraining(
     assert any("No champion model is available." in item.value for item in app.warning)
     assert any("Recorded result: rejected" in item.value for item in app.info)
     assert any("Promotion decision: not_promoted" in item.value for item in app.caption)
+
+
+def test_dashboard_keeps_operational_data_visible_when_monitoring_is_invalid(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "monitoring_state.json").write_text("{", encoding="utf-8")
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_champion_dashboard_data",
+        lambda: dashboard_operational_data.ChampionDashboardData(
+            status="ready", model_name="model", version="3"
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_retraining_dashboard_data",
+        lambda: dashboard_operational_data.RetrainingDashboardData(
+            status="no_data"
+        ),
+    )
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert any("Monitoring data unavailable:" in item.value for item in app.error)
+    assert any("Champion version: 3" in item.value for item in app.success)
+    assert any("No recorded retraining result" in item.value for item in app.info)
+
+
+def test_dashboard_keeps_ready_report_when_mlflow_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_state(tmp_path, "ready")
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_champion_dashboard_data",
+        lambda: dashboard_operational_data.ChampionDashboardData(
+            status="unavailable", error="registry offline"
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_retraining_dashboard_data",
+        lambda: dashboard_operational_data.RetrainingDashboardData(
+            status="unavailable", error="experiment offline"
+        ),
+    )
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+
+    assert app.get("iframe")
+    assert any("registry offline" in item.value for item in app.error)
+    assert any("experiment offline" in item.value for item in app.error)
+
+
+def test_dashboard_refresh_clears_old_operational_result(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MONITORING_REPORT_DIR", str(tmp_path))
+    current = {"value": True}
+
+    def champion_loader():
+        if current["value"]:
+            return dashboard_operational_data.ChampionDashboardData(
+                status="ready", model_name="model", version="11"
+            )
+        return dashboard_operational_data.ChampionDashboardData(
+            status="unavailable", error="refresh failed"
+        )
+
+    monkeypatch.setattr(
+        dashboard_operational_data, "load_champion_dashboard_data", champion_loader
+    )
+    monkeypatch.setattr(
+        dashboard_operational_data,
+        "load_retraining_dashboard_data",
+        lambda: dashboard_operational_data.RetrainingDashboardData(
+            status="not_configured", error="not configured"
+        ),
+    )
+
+    app = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    assert any("Champion version: 11" in item.value for item in app.success)
+
+    current["value"] = False
+    app.run()
+
+    assert not any("Champion version: 11" in item.value for item in app.success)
+    assert any("refresh failed" in item.value for item in app.error)

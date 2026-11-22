@@ -1,4 +1,10 @@
-"""Load read-only champion and retraining data for the dashboard."""
+"""Load read-only operational data for the dashboard.
+
+The repository records training-selection audits in the baseline MLflow
+experiment, but does not persist a retraining-specific marker.  The
+retraining loader therefore reports the latest valid selection audit and does
+not claim that the source run was a distinct retraining job.
+"""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -147,7 +153,11 @@ def _record_from_run(run: object) -> RetrainingRecord | None:
 def load_retraining_dashboard_data(
     tracking_uri: str | None = None,
 ) -> RetrainingDashboardData:
-    """Read the latest completed training-selection audit from MLflow."""
+    """Read the latest valid training-selection audit from MLflow.
+
+    The result is not proof of a separate retraining job because the existing
+    experiment does not distinguish retraining from other training runs.
+    """
     uri = tracking_uri or configured_tracking_uri()
     if uri is None:
         return RetrainingDashboardData(

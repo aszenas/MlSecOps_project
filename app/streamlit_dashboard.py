@@ -138,6 +138,10 @@ def _render_champion_status(data: ChampionDashboardData) -> None:
 def _render_retraining_status(data: RetrainingDashboardData) -> None:
     """Render the latest recorded training-selection audit result."""
     st.subheader("Retraining status")
+    st.caption(
+        "Source: the latest valid training-selection audit; this repository "
+        "does not mark separate retraining runs."
+    )
     if data.status == "ready" and data.record is not None:
         record = data.record
         st.info(f"Recorded result: {record.result}")
