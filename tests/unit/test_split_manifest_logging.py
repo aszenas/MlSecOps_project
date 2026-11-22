@@ -10,8 +10,13 @@ from predictive_maintenance.data.split_manifest import build_split_manifest
 from predictive_maintenance.data.splitting import (
     DataSplits,
     create_initial_data_splits,
+    create_retraining_data_splits,
 )
-from predictive_maintenance.models.data_lineage import log_split_manifest
+from predictive_maintenance.models.data_lineage import (
+    DatasetLineage,
+    log_dataset_lineage,
+    log_split_manifest,
+)
 
 
 @pytest.fixture
@@ -70,3 +75,32 @@ def test_row_order_changes_manifest_identifier(splits: DataSplits) -> None:
     reordered_digest = log_split_manifest(MagicMock(), "run-2", reordered)
 
     assert original_digest != reordered_digest
+
+
+def test_logs_v2_partition_membership_and_separate_dvc_hashes(splits: DataSplits) -> None:
+    source_udis = pd.Series(range(5000))
+    moved = tuple(int(index) for index in splits.X_future.index[:10])
+    v2 = create_retraining_data_splits(splits, source_udis, moved)
+    client = MagicMock()
+    lineage = DatasetLineage("dataset", dvc_hash="raw.dir", training_dvc_hash="train")
+
+    log_dataset_lineage(client, "run-v2", v2, lineage)
+    digest = log_split_manifest(client, "run-v2", v2, dataset_version="v2")
+
+    metadata = client.log_dict.call_args_list[0].args[1]
+    assert metadata["dvc_hash"] == "raw.dir"
+    assert metadata["training_dvc_hash"] == "train"
+    assert metadata["split_rows"] == {"train": 3010, "validation": 750, "future": 740, "test": 500}
+    client.set_tag.assert_any_call("run-v2", "dataset_training_dvc_hash", "train")
+    client.set_tag.assert_any_call("run-v2", "dataset_split_manifest_sha256", digest)
+
+    manifest = client.log_dict.call_args_list[1].args[1]
+    assert manifest["row_indices"] == {
+        "train": splits.X_train.index.tolist() + list(moved),
+        "validation": splits.X_validation.index.tolist(),
+        "future": splits.X_future.index[10:].tolist(),
+        "test": splits.X_test.index.tolist(),
+    }
+
+    with pytest.raises(ValueError, match="partition size"):
+        build_split_manifest(v2)

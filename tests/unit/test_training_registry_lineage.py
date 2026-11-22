@@ -129,7 +129,7 @@ def test_manifest_is_logged_before_selection(
 
     client = workflow["MlflowClient"].return_value
     workflow["log_split_manifest"].assert_called_once_with(
-        client, "run-123", splits
+        client, "run-123", splits, dataset_version="v1"
     )
     assert [entry[0] for entry in timeline.mock_calls] == [
         "lineage", "manifest", "selection",
