@@ -7,6 +7,7 @@ from pathlib import Path
 from predictive_maintenance.data.provenance import (
     read_clean_git_commit,
     verify_dvc_dataset,
+    verify_dvc_training_file,
 )
 
 
@@ -70,7 +71,7 @@ def prepare_repository() -> str:
 
 
 def prepare_data() -> None:
-    """Restore and verify the dataset tracked by the training checkout."""
+    """Restore and verify the raw dataset and v2 training data."""
     subprocess.run(
         [
             sys.executable,
@@ -78,6 +79,7 @@ def prepare_data() -> None:
             "dvc",
             "pull",
             "data/raw.dvc",
+            "data/processed/training/train_v2.csv.dvc",
             "-r",
             "dagshub",
         ],
@@ -86,6 +88,7 @@ def prepare_data() -> None:
         timeout=300,
     )
     verify_dvc_dataset(TRAINING_ROOT)
+    verify_dvc_training_file(TRAINING_ROOT)
 
 
 def main() -> None:
