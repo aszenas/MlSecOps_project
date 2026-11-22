@@ -3,14 +3,60 @@
 import json
 from math import isclose, isfinite
 from pathlib import Path
+from typing import cast
 
 
-def summarize_report(report_path: Path) -> dict[str, int | float | bool]:
+def _finite_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError("ValueDrift values must be numeric.")
+    try:
+        numeric_value = float(value)
+    except ValueError as exc:
+        raise ValueError("ValueDrift values must be numeric.") from exc
+    if not isfinite(numeric_value):
+        raise ValueError("ValueDrift values must be finite.")
+    return numeric_value
+
+
+def _drifted_column(metric: object) -> str | None:
+    if not isinstance(metric, dict):
+        raise ValueError("Report metrics must be objects.")
+    typed_metric = cast(dict[str, object], metric)
+    config = typed_metric.get("config")
+    if not isinstance(config, dict):
+        raise ValueError("Report metric configuration must be an object.")
+    typed_config = cast(dict[str, object], config)
+    if typed_config.get("type") != "evidently:metric_v2:ValueDrift":
+        return None
+
+    column = typed_config.get("column")
+    if not isinstance(column, str) or not column:
+        raise ValueError("A ValueDrift metric has no valid column name.")
+    drift_value = _finite_float(typed_metric.get("value"))
+    drift_threshold = _finite_float(typed_config.get("threshold"))
+    return column if drift_value >= drift_threshold else None
+
+
+def _drifted_columns(metrics: object) -> list[str]:
+    if not isinstance(metrics, list):
+        raise ValueError("The report metrics must be a list.")
+    return [
+        column
+        for metric in metrics
+        if (column := _drifted_column(metric)) is not None
+    ]
+
+
+def summarize_report(report_path: Path) -> dict[str, int | float | bool | list[str]]:
     """Read and validate the aggregate drift metric."""
     payload = json.loads(report_path.read_text(encoding="utf-8"))
 
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, list):
+        raise ValueError("The report metrics must be a list.")
+
     matches = [
-        metric for metric in payload["metrics"]
+        metric for metric in metrics
         if metric["config"]["type"]
         == "evidently:metric_v2:DriftedColumnsCount"
     ]
@@ -49,6 +95,7 @@ def summarize_report(report_path: Path) -> dict[str, int | float | bool]:
         "drifted_column_share": share,
         "drift_share_threshold": threshold,
         "threshold_reached": share >= threshold,
+        "drifted_columns": _drifted_columns(metrics),
     }
 
 
