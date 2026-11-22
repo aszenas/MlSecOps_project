@@ -1,5 +1,6 @@
 """Generate the baseline monitoring report from fixed data splits."""
 
+import os
 from pathlib import Path
 
 from predictive_maintenance.data.loader import load_raw_data
@@ -10,6 +11,11 @@ from predictive_maintenance.monitoring.simulation import simulate_feature_drift
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+REPORTS_ROOT = Path(
+    os.environ.get("REPORTS_DIR", str(PROJECT_ROOT / "reports"))
+)
 
 
 def main() -> None:
@@ -27,7 +33,7 @@ def main() -> None:
     html_path, json_path = DriftReporter().save(
         reference=splits.X_train,
         current=splits.X_future,
-        output_dir=PROJECT_ROOT / "reports" / "baseline",
+        output_dir=REPORTS_ROOT / "baseline",
     )
 
     print(f"Reference rows: {len(splits.X_train)}")
@@ -40,7 +46,7 @@ def main() -> None:
     shifted_html, shifted_json = DriftReporter().save(
         reference=splits.X_train,
         current=shifted_current,
-        output_dir=PROJECT_ROOT / "reports" / "simulated_drift",
+        output_dir=REPORTS_ROOT / "simulated_drift",
     )
 
     print(f"Simulated drift HTML: {shifted_html}")
