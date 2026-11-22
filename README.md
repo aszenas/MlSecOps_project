@@ -448,6 +448,10 @@ see the [API contract](docs/api_contract.md).
 For Evidently report generation, drift rules, outputs, and validation,
 see the [monitoring documentation](docs/monitoring.md).
 
+For the Streamlit dashboard, its states, configuration, and the reproducible
+persisted-prediction drift demonstration, see the
+[dashboard and monitoring demo guide](docs/dashboard_monitoring.md).
+
 ## DVC–MLflow training lineage
 
 For verified dataset versions, reproducible training commands and split
