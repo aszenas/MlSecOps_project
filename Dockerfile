@@ -16,9 +16,11 @@ RUN python -m pip install --no-cache-dir --no-compile -r requirements.txt \
     && python -m pip check
 
 RUN useradd --create-home --uid 10001 appuser \
-    && install -d -o appuser -g appuser /app/artifacts
+    && install -d -o appuser -g appuser /app/artifacts /workspace
 
 COPY --chown=appuser:appuser src/ ./src/
+
+COPY --chown=appuser:appuser scripts/ ./scripts/
 
 USER appuser
 
