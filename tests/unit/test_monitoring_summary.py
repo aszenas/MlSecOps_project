@@ -118,3 +118,114 @@ def test_save_summary(tmp_path: Path) -> None:
     assert saved["drifted_column_count"] == 4
     assert saved["threshold_reached"] is True
     assert report_path.read_bytes() == original
+
+
+def test_extracts_drifted_columns_from_value_drift_metrics(tmp_path: Path) -> None:
+    """Use the installed Evidently ValueDrift metric schema for feature names."""
+    payload = make_payload(count=2)
+    payload["metrics"].extend([
+        {
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "type",
+                "threshold": 0.1,
+            },
+            "value": 0.2,
+        },
+        {
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "torque_nm",
+                "threshold": 0.1,
+            },
+            "value": 0.1,
+        },
+        {
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "tool_wear_min",
+                "threshold": 0.1,
+            },
+            "value": 0.01,
+        },
+    ])
+
+    summary = summarize_report(write_report(tmp_path, payload))
+
+    assert summary["drifted_columns"] == ["type", "torque_nm"]
+
+
+def test_rejects_malformed_value_drift_metric(tmp_path: Path) -> None:
+    """Do not turn an uninterpretable drift metric into a valid decision."""
+    payload = make_payload()
+    payload["metrics"].append({
+        "config": {
+            "type": "evidently:metric_v2:ValueDrift",
+            "column": "type",
+            "threshold": "not-a-number",
+        },
+        "value": 0.2,
+    })
+
+    with pytest.raises(ValueError, match="numeric"):
+        summarize_report(write_report(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        None,
+        [{"config": None, "value": 0}],
+        [{
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "",
+                "threshold": 0.1,
+            },
+            "value": 0.2,
+        }],
+        [{
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "type",
+                "threshold": float("inf"),
+            },
+            "value": 0.2,
+        }],
+        [{
+            "config": {
+                "type": "evidently:metric_v2:ValueDrift",
+                "column": "type",
+                "threshold": 0.1,
+            },
+            "value": float("nan"),
+        }],
+    ],
+)
+def test_rejects_invalid_value_drift_shape(tmp_path: Path, metrics: object) -> None:
+    """Reject malformed ValueDrift metadata instead of hiding report errors."""
+    payload = make_payload()
+    payload["metrics"].extend(metrics if isinstance(metrics, list) else [])
+    if metrics is None:
+        payload["metrics"] = metrics
+
+    with pytest.raises(ValueError):
+        summarize_report(write_report(tmp_path, payload))
+
+
+def test_rejects_non_object_metric(tmp_path: Path) -> None:
+    """Reject a metrics list containing a non-object entry."""
+    payload = make_payload()
+    payload["metrics"] = ["not-a-metric"]
+
+    with pytest.raises(ValueError, match="objects"):
+        summarize_report(write_report(tmp_path, payload))
+
+
+def test_rejects_incomplete_aggregate_metric(tmp_path: Path) -> None:
+    """Reject an aggregate metric without its value object."""
+    payload = make_payload()
+    payload["metrics"][0].pop("value")
+
+    with pytest.raises(ValueError, match="incomplete"):
+        summarize_report(write_report(tmp_path, payload))
