@@ -242,6 +242,42 @@ def test_train_accepts_empty_object(mock_training: MagicMock) -> None:
     mock_training.assert_called_once_with(model_type="gradient_boosting", dataset_version="v1")
 
 
+@pytest.mark.parametrize("dataset_version", ["v1", "v2"])
+def test_train_accepts_dataset_version(
+    dataset_version: str,
+    mock_training: MagicMock,
+) -> None:
+    response = client.post(
+        "/train",
+        json={"dataset_version": dataset_version},
+    )
+
+    assert response.status_code == 200
+    mock_training.assert_called_once_with(
+        model_type="gradient_boosting",
+        dataset_version=dataset_version,
+    )
+
+
+@pytest.mark.parametrize("dataset_version", ["v3", "", None, 2])
+def test_train_rejects_invalid_dataset_version(
+    dataset_version: str | int | None,
+    mock_training: MagicMock,
+) -> None:
+    response = client.post(
+        "/train",
+        json={"dataset_version": dataset_version},
+    )
+
+    assert response.status_code == 422
+    assert any(
+        error["loc"] == ["body", "dataset_version"]
+        and error["type"] == "literal_error"
+        for error in response.json()["detail"]
+    )
+    mock_training.assert_not_called()
+
+
 @pytest.mark.parametrize("champion", ["1", None])
 def test_rejected_training_is_completed_without_claiming_a_promotion(
     mock_training: MagicMock, champion: str | None,

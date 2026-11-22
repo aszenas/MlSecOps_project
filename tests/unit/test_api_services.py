@@ -16,6 +16,7 @@ from predictive_maintenance.models.training_registry import TrainingRegistryResu
 from predictive_maintenance.models.model_selection import SelectionResult
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.api.schemas import PredictionRequest
+from predictive_maintenance.data.split_manifest import DatasetVersion
 
 
 @pytest.fixture
@@ -134,11 +135,13 @@ def training_result() -> TrainingRegistryResult:
 
 @pytest.mark.parametrize("model_type", ["gradient_boosting", "xgboost"])
 @pytest.mark.parametrize("tracking_uri", [None, "http://mlflow.test:5000"])
+@pytest.mark.parametrize("dataset_version", ["v1", "v2"])
 def test_train_pipeline_delegates_to_verified_registry_training(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     model_type: ModelType,
     tracking_uri: str | None,
+    dataset_version: DatasetVersion,
     training_result: TrainingRegistryResult,
 ) -> None:
     training = MagicMock(return_value=training_result)
@@ -147,10 +150,15 @@ def test_train_pipeline_delegates_to_verified_registry_training(
         monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
     monkeypatch.setattr(services, "train_from_dvc", training)
 
-    assert services.train_pipeline(model_type) is training_result
+    assert services.train_pipeline(
+        model_type,
+        dataset_version=dataset_version,
+    ) is training_result
     training.assert_called_once_with(
-        repository_root=tmp_path.resolve(), model_type=model_type,
-        tracking_uri=tracking_uri or "http://127.0.0.1:5000", dataset_version="v1",
+        repository_root=tmp_path.resolve(),
+        model_type=model_type,
+        tracking_uri=tracking_uri or "http://127.0.0.1:5000",
+        dataset_version=dataset_version,
     )
 
 
