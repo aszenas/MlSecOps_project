@@ -12,7 +12,7 @@ RUN apt-get update \
 
 COPY requirements.txt ./
 
-RUN python -m pip install --no-cache-dir --no-compile -r requirements.txt \
+RUN python -m pip install --no-cache-dir --no-compile --timeout=120 --retries=5 -r requirements.txt \
     && python -m pip check
 
 RUN useradd --create-home --uid 10001 appuser \
