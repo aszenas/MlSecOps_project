@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 import argparse
 import subprocess
 from tempfile import TemporaryDirectory
-
+import mlflow
 from mlflow import MlflowClient
 from mlflow.artifacts import download_artifacts
 from mlflow.exceptions import MlflowException
@@ -177,7 +177,9 @@ def verify_persistence() -> int:
         check_health("API", f"{API_URL}/health")
         check_health("MLflow", f"{MLFLOW_URL}/health")
         check_health("Streamlit", f"{STREAMLIT_URL}/_stcore/health")
-
+        mlflow.set_tracking_uri(MLFLOW_URL)
+        mlflow.set_registry_uri(MLFLOW_URL)
+        
         client = MlflowClient(
             tracking_uri=MLFLOW_URL,
             registry_uri=MLFLOW_URL,
