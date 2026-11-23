@@ -22,6 +22,52 @@ REPORT_DIRECTORY_ENV = "MONITORING_REPORT_DIR"
 DEFAULT_REPORT_DIRECTORY = PROJECT_ROOT / "reports" / "monitoring"
 
 
+DASHBOARD_STYLES = """
+<style>
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] [data-testid="stMarkdownContainer"],
+[data-testid="stMetricLabel"] p {
+    height: auto;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+}
+[data-testid="stMarkdownContainer"] p {
+    overflow-wrap: anywhere;
+}
+</style>
+"""
+
+REPORT_STYLES = """
+<style id="dashboard-report-layout">
+html {
+    overflow-x: auto !important;
+}
+body {
+    margin: 0;
+}
+body > div[id^="root"] {
+    min-width: 1400px;
+}
+.MuiTypography-root {
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+}
+.MuiCardContent-root {
+    overflow-x: auto;
+}
+</style>
+"""
+
+
+def report_html_for_display(html: str) -> str:
+    """Style only the embedded copy, keeping the downloadable report intact."""
+    if "</head>" in html:
+        return html.replace("</head>", REPORT_STYLES + "</head>", 1)
+    return REPORT_STYLES + html
+
+
 def configured_report_directory() -> Path:
     """Return the configured report directory, resolved from the project root."""
     configured = os.environ.get(REPORT_DIRECTORY_ENV)
@@ -195,7 +241,7 @@ def _render_status(data: MonitoringDashboardData) -> None:
             on_click="ignore",
         )
         st.iframe(
-            data.html,
+            report_html_for_display(data.html),
             width="stretch",
             height=800,
             alt="Evidently monitoring report",
@@ -210,7 +256,9 @@ def main() -> None:
     st.set_page_config(
         page_title="Predictive Maintenance Monitoring",
         page_icon="📈",
+        layout="wide",
     )
+    st.html(DASHBOARD_STYLES)
     st.title("Predictive Maintenance Monitoring")
     st.write("View the latest persisted monitoring state and report status.")
 
