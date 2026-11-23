@@ -60,6 +60,7 @@ def test_cycle_preserves_monitoring_and_reports_export_outcome(
         "status": "partial_failure" if export_status == "failed" else "completed",
         "monitoring": state,
         "export": expected_export,
+        "retraining": {"status": "disabled"},
     }
     monitor.assert_called_once_with(
         repository_root=tmp_path,
@@ -95,3 +96,60 @@ def test_monitoring_failure_stops_the_cycle_before_export(
         )
 
     exporter.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [
+        ("completed", "completed"),
+        ("duplicate_input", "completed"),
+        ("failed", "partial_failure"),
+        ("exception", "partial_failure"),
+    ],
+)
+def test_cycle_connects_retraining_and_reports_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    outcome: str,
+    expected_status: str,
+) -> None:
+    state = {"status": "ready", "drift_decision": True}
+    monitoring_result = MagicMock()
+    monitoring_result.to_dict.return_value = state
+    trainer = MagicMock(return_value={"status": outcome})
+    if outcome == "exception":
+        trainer.side_effect = RuntimeError("Training unavailable.")
+
+    monkeypatch.setattr(
+        automation, "run_monitoring",
+        MagicMock(return_value=monitoring_result),
+    )
+    monkeypatch.setattr(
+        automation, "export_prediction_events", MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(automation, "run_retraining", trainer)
+
+    database = tmp_path / "predictions.db"
+    result = automation.run_monitoring_cycle(
+        repository_root=tmp_path,
+        database_path=database,
+        start=START,
+        end=END,
+        output_dir=tmp_path / "reports",
+        tracking_uri="http://mlflow.test:5000",
+        retraining_enabled=True,
+    )
+
+    assert result["status"] == expected_status
+    assert result["monitoring"] == state
+    assert result["retraining"] == (
+        {"status": "failed", "error": "Training unavailable."}
+        if outcome == "exception"
+        else {"status": outcome}
+    )
+    trainer.assert_called_once_with(
+        repository_root=tmp_path,
+        database_path=database,
+        monitoring_state=state,
+        tracking_uri="http://mlflow.test:5000",
+    )

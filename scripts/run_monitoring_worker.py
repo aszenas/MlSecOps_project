@@ -47,6 +47,12 @@ def run_once(
         )
     )
 
+    enabled = os.environ.get(
+        "AUTOMATIC_RETRAINING_ENABLED", "false",
+    ).strip().lower()
+    if enabled not in {"true", "false"}:
+        raise ValueError("AUTOMATIC_RETRAINING_ENABLED must be true or false.")
+
     return run_monitoring_cycle(
         repository_root=get_training_repository_root(),
         database_path=database_path.resolve(),
@@ -55,6 +61,7 @@ def run_once(
         output_dir=output_dir.resolve(),
         tracking_uri=get_tracking_uri(),
         minimum_samples=minimum_samples,
+        retraining_enabled=enabled == "true",
     )
 
 

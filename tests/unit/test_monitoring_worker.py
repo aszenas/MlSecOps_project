@@ -104,6 +104,7 @@ def test_run_once_uses_configured_paths_and_utc_window(
     monkeypatch.setenv("PREDICTION_LOG_DB", str(database))
     monkeypatch.setenv("REPORTS_DIR", str(reports))
     monkeypatch.delenv("MONITORING_REPORT_DIR", raising=False)
+    monkeypatch.setenv("AUTOMATIC_RETRAINING_ENABLED", "false")
 
     assert worker_module.run_once(3600, 150) == {"status": "completed"}
     cycle.assert_called_once_with(
@@ -114,6 +115,7 @@ def test_run_once_uses_configured_paths_and_utc_window(
         output_dir=(reports / "monitoring").resolve(),
         tracking_uri="http://mlflow.test:5000",
         minimum_samples=150,
+        retraining_enabled=False,
     )
 
 
