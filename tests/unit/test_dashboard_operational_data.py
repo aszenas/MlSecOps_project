@@ -266,3 +266,20 @@ def test_operational_data_is_json_serializable() -> None:
     )
 
     json.dumps(module.operational_data_to_dict(champion, retraining), allow_nan=False)
+
+
+def test_training_audit_distinguishes_automatic_and_legacy_runs() -> None:
+    run = _run()
+    legacy = module._record_from_run(run)
+    assert legacy is not None
+    assert legacy.operation == "training"
+
+    run.data.tags.update({
+        "operation": "automated_retraining",
+        "retraining_attempt_id": "attempt-123",
+    })
+    automatic = module._record_from_run(run)
+
+    assert automatic is not None
+    assert automatic.operation == "automated_retraining"
+    assert automatic.attempt_id == "attempt-123"

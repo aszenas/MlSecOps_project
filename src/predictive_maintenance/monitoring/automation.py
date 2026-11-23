@@ -65,6 +65,7 @@ def run_monitoring_cycle(
     failed = (
         export_result.get("status") == "failed"
         or retraining_result.get("status") == "failed"
+        or retraining_result.get("audit_status") == "failed"
     )
     return {
         "status": "partial_failure" if failed else "completed",

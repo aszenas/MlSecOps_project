@@ -40,6 +40,9 @@ def training_setup(
     ))
     monkeypatch.setattr(retraining, "verify_retraining_data", verifier)
     monkeypatch.setattr(retraining, "train_from_dvc", trainer)
+    monkeypatch.setattr(
+        retraining, "MlflowClient", MagicMock(return_value=MagicMock()),
+    )
     return verifier, trainer
 
 
@@ -158,3 +161,55 @@ def test_failed_training_is_recorded_and_not_repeated(
         ).fetchone()
 
     assert status == ("failed",)
+
+
+def test_automatic_run_receives_identifying_tags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    training_setup: tuple[MagicMock, MagicMock],
+) -> None:
+    client = MagicMock()
+    monkeypatch.setattr(retraining, "MlflowClient", MagicMock(return_value=client))
+
+    result = retraining.run_retraining(
+        tmp_path, tmp_path / "predictions.db",
+        drift_state(), "http://mlflow.test:5000",
+    )
+
+    assert result["status"] == "completed"
+    assert result["audit_status"] == "completed"
+    client.set_tag.assert_any_call(
+        "automatic-run", "operation", "automated_retraining",
+    )
+    client.set_tag.assert_any_call(
+        "automatic-run", "retraining_attempt_id", result["attempt_id"],
+    )
+    client.set_tag.assert_any_call(
+        "automatic-run", "retraining_dataset_version", "v2",
+    )
+
+
+def test_audit_failure_does_not_misreport_successful_training(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    training_setup: tuple[MagicMock, MagicMock],
+) -> None:
+    client = MagicMock()
+    client.set_tag.side_effect = RuntimeError("Audit unavailable.")
+    monkeypatch.setattr(retraining, "MlflowClient", MagicMock(return_value=client))
+    database = tmp_path / "predictions.db"
+
+    result = retraining.run_retraining(
+        tmp_path, database, drift_state(), "http://mlflow.test:5000",
+    )
+
+    assert result["status"] == "completed"
+    assert result["audit_status"] == "failed"
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute(
+            "SELECT status, result FROM retraining_attempts"
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "completed"
+    assert json.loads(row[1])["audit_error"] == "Audit unavailable."

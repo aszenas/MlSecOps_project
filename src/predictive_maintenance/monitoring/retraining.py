@@ -13,6 +13,7 @@ from predictive_maintenance.data.provenance import (
 )
 
 from mlflow.exceptions import MlflowException
+from mlflow import MlflowClient
 
 from predictive_maintenance.models.dvc_training import train_from_dvc
 from predictive_maintenance.models.training import ModelType
@@ -155,11 +156,41 @@ def run_retraining(
         }
 
     result = asdict(training)
+    audit_error = record_retraining_tags(
+        tracking_uri, training.run_id, attempt_id, context,
+    )
+    if audit_error is not None:
+        result["audit_error"] = audit_error
+
     finish_retraining_attempt(
         database_path, attempt_id, "completed", result,
     )
     return {
         "status": "completed",
         "attempt_id": attempt_id,
+        "audit_status": "failed" if audit_error is not None else "completed",
         "training": result,
     }
+
+
+def record_retraining_tags(
+    tracking_uri: str,
+    run_id: str,
+    attempt_id: str,
+    context: Mapping[str, object],
+) -> str | None:
+    """Identify automatic training without misreporting audit failures."""
+    tags = {
+        "retraining_attempt_id": attempt_id,
+        "retraining_dataset_version": "v2",
+        "retraining_window_start": str(context["window_start"]),
+        "retraining_window_end": str(context["window_end"]),
+        "operation": "automated_retraining",
+    }
+    try:
+        client = MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
+        for key, value in tags.items():
+            client.set_tag(run_id, key, value)
+    except (OSError, RuntimeError, ValueError, MlflowException) as exc:
+        return str(exc)
+    return None

@@ -1,10 +1,4 @@
-"""Load read-only operational data for the dashboard.
-
-The repository records training-selection audits in the baseline MLflow
-experiment, but does not persist a retraining-specific marker.  The
-retraining loader therefore reports the latest valid selection audit and does
-not claim that the source run was a distinct retraining job.
-"""
+"""Load champion and training-selection audits with automatic-run markers."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +42,8 @@ class RetrainingRecord:
     challenger_version: str
     promotion_decision: str
     selection_reason: str | None = None
+    operation: str = "training"
+    attempt_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,17 +143,23 @@ def _record_from_run(run: object) -> RetrainingRecord | None:
         challenger_version=challenger_version,
         promotion_decision=promotion_status,
         selection_reason=reason if isinstance(reason, str) else None,
+        operation=(
+            "automated_retraining"
+            if tags.get("operation") == "automated_retraining"
+            else "training"
+        ),
+        attempt_id=(
+            tags["retraining_attempt_id"]
+            if isinstance(tags.get("retraining_attempt_id"), str)
+            else None
+        ),
     )
 
 
 def load_retraining_dashboard_data(
     tracking_uri: str | None = None,
 ) -> RetrainingDashboardData:
-    """Read the latest valid training-selection audit from MLflow.
-
-    The result is not proof of a separate retraining job because the existing
-    experiment does not distinguish retraining from other training runs.
-    """
+    """Read the latest valid training-selection audit and its origin."""
     uri = tracking_uri or configured_tracking_uri()
     if uri is None:
         return RetrainingDashboardData(
@@ -227,6 +229,8 @@ def operational_data_to_dict(
                 "challenger_version": record.challenger_version,
                 "promotion_decision": record.promotion_decision,
                 "selection_reason": record.selection_reason,
+                "operation": record.operation,
+                "attempt_id": record.attempt_id,
             }.items()
         },
         "error": retraining.error,
