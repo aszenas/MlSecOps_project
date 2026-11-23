@@ -383,4 +383,3 @@ def test_inconsistent_drift_decision_is_unavailable(
     assert result.state is None
     assert result.html is None
     assert result.error == "State and summary drift decisions are inconsistent."
-    
