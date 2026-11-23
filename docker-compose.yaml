@@ -98,6 +98,31 @@ services:
       timeout: 6s
       retries: 6
       start_period: 30s
+  monitoring:
+    image: mlsecops-api:compose
+    working_dir: /workspace/repository
+    command:
+      - python
+      - /workspace/repository/scripts/run_monitoring_worker.py
+    environment:
+      PYTHONPATH: /workspace/repository/src
+      TRAINING_REPOSITORY_ROOT: /workspace/repository
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PREDICTION_LOG_DB: /app/artifacts/predictions.db
+      REPORTS_DIR: /app/reports
+      MONITORING_INTERVAL_SECONDS: ${MONITORING_INTERVAL_SECONDS:-300}
+      MONITORING_WINDOW_SECONDS: ${MONITORING_WINDOW_SECONDS:-3600}
+      MONITORING_MINIMUM_SAMPLES: ${MONITORING_MINIMUM_SAMPLES:-100}
+      AUTOMATIC_RETRAINING_ENABLED: ${AUTOMATIC_RETRAINING_ENABLED:-false}
+    volumes:
+      - training_workspace:/workspace
+      - prediction_data:/app/artifacts
+      - reports_data:/app/reports
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 120s
 
 volumes:
   mlflow_data:

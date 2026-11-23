@@ -136,14 +136,19 @@ def _render_champion_status(data: ChampionDashboardData) -> None:
 
 
 def _render_retraining_status(data: RetrainingDashboardData) -> None:
-    """Render the latest recorded training-selection audit result."""
+    """Render the latest training-selection result and its origin."""
     st.subheader("Retraining status")
-    st.caption(
-        "Source: the latest valid training-selection audit; this repository "
-        "does not mark separate retraining runs."
-    )
+    st.caption("Source: the latest valid MLflow training-selection audit.")
+
     if data.status == "ready" and data.record is not None:
         record = data.record
+        if record.operation == "automated_retraining":
+            st.caption("Trigger: automatic drift-based retraining")
+            if record.attempt_id is not None:
+                st.caption(f"Attempt ID: {record.attempt_id}")
+        else:
+            st.caption("Trigger: manual training or legacy audit")
+
         st.info(f"Recorded result: {record.result}")
         st.caption(f"Run time (UTC): {record.completed_at}")
         st.caption(f"Run ID: {record.run_id}")

@@ -3,13 +3,16 @@
 ## Purpose
 
 Compare reference and current model input distributions, inspect data quality,
-and export reports for later dashboard and retraining integration.
+and publish reports for the dashboard and optional automated retraining.
 
 The recorded clean-clone and Streamlit–Evidently evidence is summarized in the
 [data and monitoring verification record](verification_record.md).
 
-The component currently runs on file-based data. It does not consume live API
-logs or automatically retrain or promote models.
+The original demo runner uses fixed file-based data. The API monitoring
+pipeline also reads persisted prediction events. The separate Compose worker
+schedules this pipeline and can invoke verified retraining; promotion remains
+the responsibility of the existing model-selection code. See the
+[automated retraining guide](automated_retraining.md).
 
 ## Environment
 
