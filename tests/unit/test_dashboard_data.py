@@ -364,3 +364,22 @@ def test_dashboard_loader_state_transitions_do_not_retain_old_result(
     assert ready_again.html == "<html>second</html>"
     assert ready_again.state is not None
     assert ready_again.state["drift_decision"] is True
+
+
+@pytest.mark.parametrize("drift_decision", [False, True])
+def test_inconsistent_drift_decision_is_unavailable(
+    tmp_path: Path,
+    drift_decision: bool,
+) -> None:
+    _write_ready_reports(tmp_path, drift_decision=drift_decision)
+    state_path = tmp_path / "monitoring_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["drift_decision"] = not drift_decision
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    result = load_monitoring_dashboard_data(tmp_path)
+
+    assert result.status == "unavailable"
+    assert result.state is None
+    assert result.html is None
+    assert result.error == "State and summary drift decisions are inconsistent."

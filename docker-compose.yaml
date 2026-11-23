@@ -64,11 +64,11 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"
-      interval: 10s
-      timeout: 6s
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=10).close()"
+      interval: 20s
+      timeout: 30s
       retries: 6
-      start_period: 60s
+      start_period: 180s
 
   streamlit:
     build: .
@@ -76,14 +76,15 @@ services:
     ports:
       - "127.0.0.1:8501:8501"
     environment:
-      REPORTS_DIR: /app/reports
+      MONITORING_REPORT_DIR: /app/reports/monitoring
+      MLFLOW_TRACKING_URI: http://mlflow:5000
     volumes:
       - reports_data:/app/reports:ro
     depends_on:
       api:
         condition: service_healthy
     command: >-
-      python -m streamlit run /app/app/placeholder.py
+      python -m streamlit run /app/app/streamlit_dashboard.py
       --server.address 0.0.0.0
       --server.port 8501
       --server.headless true
