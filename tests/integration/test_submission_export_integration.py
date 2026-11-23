@@ -52,9 +52,9 @@ def test_export_preserves_raw_rows_and_initial_split_membership(
     assert len(exported) == 5000
     assert set(exported["partition"]) == {"train", "validation", "future", "test"}
     assert exported[expected_features].select_dtypes(exclude="number").empty
-    assert exported[expected_features].notna().all().all()
+    assert bool(exported[expected_features].notna().to_numpy().all())
     assert np.isfinite(exported[expected_features].to_numpy()).all()
-    assert exported["target"].isin([0, 1]).all()
+    assert bool(exported["target"].isin([0, 1]).to_numpy().all())
     assert exported["source_udi"].is_unique
     assert set(exported["source_udi"]) == set(raw["UDI"])
 
@@ -65,8 +65,8 @@ def test_export_preserves_raw_rows_and_initial_split_membership(
             expected_by_udi[int(raw.loc[index, "UDI"])] = (name, int(value))
 
     actual_by_udi = {
-        int(row.source_udi): (row.partition, int(row.target))
-        for row in exported.itertuples(index=False)
+        int(row[-1]): (row[-2], int(row[-3]))
+        for row in exported.itertuples(index=False, name=None)
     }
     assert actual_by_udi == expected_by_udi
     assert len(actual_by_udi) == 5000
@@ -88,7 +88,9 @@ def test_export_preserves_raw_rows_and_initial_split_membership(
     }
     assert metadata["feature_names"] == expected_features
     assert metadata["raw_dvc_hash"] == read_dvc_directory_hash(repository_root)
-    assert metadata["split_policy"]["version"] == INITIAL_SPLIT_VERSION
+    split_policy = metadata["split_policy"]
+    assert isinstance(split_policy, dict)
+    assert split_policy["version"] == INITIAL_SPLIT_VERSION
     assert metadata["split_manifest_sha256"]
     assert manifest["row_index_meaning"] == "index of the loaded source dataset"
 
