@@ -179,7 +179,7 @@ def verify_persistence() -> int:
         check_health("Streamlit", f"{STREAMLIT_URL}/_stcore/health")
         mlflow.set_tracking_uri(MLFLOW_URL)
         mlflow.set_registry_uri(MLFLOW_URL)
-        
+
         client = MlflowClient(
             tracking_uri=MLFLOW_URL,
             registry_uri=MLFLOW_URL,

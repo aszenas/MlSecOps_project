@@ -168,7 +168,7 @@ S3 URL `s3://dvc`, and the endpoint in `.dvc/config`.
 The following commands use PowerShell and run from the repository root:
 
 ```powershell
-git clone https://github.com/aszenas/MlSecOps_project.git 
+git clone https://github.com/aszenas/MlSecOps_project.git
 cd MlSecOps_project
 Copy-Item .env.example .env
 ```
