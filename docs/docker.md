@@ -11,8 +11,9 @@ The API writes prediction events to persistent SQLite storage.
 The monitoring command publishes reports to the shared report volume,
 which the dashboard reads without modifying it.
 
-Monitoring is currently started manually.
-Scheduling and automatic retraining are not connected yet.
+The `monitoring` service schedules monitoring and incremental prediction export.
+Automatic retraining is optional and defaults to disabled. See the
+[automated retraining guide](automated_retraining.md) for activation and checks.
 
 ## Prerequisites
 
@@ -61,6 +62,7 @@ Expected states:
 
 - `prepare`: Exited (0).
 - `api`, `mlflow`, `streamlit`: healthy.
+- `monitoring`: Up; it is a background worker without an HTTP health check.
 
 The preparation service runs once and exits after verification.
 Health checks indicate HTTP responsiveness.
@@ -171,7 +173,8 @@ The check verifies the run, Registry versions, model artifact download,
 saved prediction event and continued champion serving.
 
 Do not intentionally change the champion between saving the verification
-snapshot and checking its persistence.
+snapshot and checking its persistence. Pause the monitoring worker during
+this check if automatic retraining is enabled.
 
 ## Manual v2 verification
 
@@ -239,7 +242,8 @@ Click **Refresh monitoring data** after the command finishes.
 - Invalid command arguments: exit code 2.
 
 The dashboard refresh does not start monitoring.
-Monitoring does not start training or change the champion.
+The manual `run_api_monitoring.py` command does not start training.
+The separate worker can retrain when automatic retraining is enabled.
 
 For command options and detailed behavior, see the
 [dashboard and monitoring guide](dashboard_monitoring.md).
@@ -327,3 +331,7 @@ training file after dataset-version integration.
 
 Complete persistence-check results must be recorded after successful execution.
 CI results must be confirmed on the pull request.
+
+The automated one-shot Docker run on 2026-11-23 trained candidate version 3,
+recorded automatic-run tags and retained champion version 2 because F1 did not
+improve. See the [verification record](verification_record.md#automated-retraining-verification).

@@ -116,8 +116,10 @@ It does not load the model artifact.
 The training-selection panel reads the latest valid audit from the
 `predictive-maintenance-baselines` MLflow experiment.
 
-The repository does not yet persist a separate automatic-retraining marker,
-so this panel does not prove that an automatic retraining job occurred.
+Runs tagged `operation=automated_retraining` are displayed as automatic
+drift-based retraining, including their attempt ID. Untagged historical runs
+remain identified as manual training or legacy audits. The panel shows the
+latest valid selection audit, not the current worker or waiting state.
 
 Missing configuration, no audit data and an unavailable backend
 are displayed as non-success states.
@@ -447,8 +449,9 @@ persisted events, monitoring output and dashboard rendering.
 
 ## Limitations
 
-- Monitoring is started manually; no scheduler is installed.
-- Drift does not yet trigger automatic training.
+- The manual monitoring command does not train. The Compose worker can
+  schedule cycles and optionally retrain; see the
+  [automated retraining guide](automated_retraining.md).
 - Prediction events contain features and model outputs, not verified target labels.
   They must not be treated directly as labeled retraining data.
 - The reference loader requires the versioned raw dataset and a successful
@@ -457,7 +460,7 @@ persisted events, monitoring output and dashboard rendering.
   an API request/response test.
 - The champion and training-selection panels require an explicitly configured
   MLflow backend.
-- The current MLflow experiment does not distinguish an automatic retraining
-  job from another training-selection run.
+- Automatic-run identification requires the new MLflow operation tag.
+  An audit-tagging failure is recorded separately from successful training.
 - No dashboard action starts monitoring, training, retraining, DVC pull
   or Registry changes.

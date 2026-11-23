@@ -78,10 +78,11 @@ items, not successful checks.
 
 ## Boundaries and CI status
 
-The dashboard's audit panel displays the latest valid training-selection audit.
-Without a separate retraining marker, it does not prove that an automatic
-retraining run occurred. The champion value comes from the current Registry
-alias and is not inferred from an earlier training result.
+At the time of the earlier verification above, the dashboard's audit panel
+had no separate automatic-retraining marker. New runs can now carry
+`operation=automated_retraining`; the new Docker evidence is recorded below.
+The champion value still comes from the current Registry alias and is not
+inferred from an earlier training result.
 
 Local documentation and repository checks are separate from GitHub Actions.
 The current workflow is [`python-qa.yml`](../.github/workflows/python-qa.yml).
@@ -95,3 +96,44 @@ paths and the resulting artifact in GitHub.
 The record is therefore evidence for the submission restore and the recorded
 local monitoring scenarios, not a claim that the complete project is
 end-to-end verified.
+
+## Automated retraining verification
+
+Date: 2026-11-23. Evidence source: the completed one-shot Docker worker output
+provided during development. Real API requests populated the persisted store.
+
+| Item | Observed result |
+| --- | --- |
+| Monitoring window (UTC) | 2026-11-23T19:31:15.525626Z to 2026-11-23T20:31:15.525626Z |
+| Valid current samples | 100 |
+| Drift decision | true; all six monitored fields drifted |
+| Prediction export | 100 events |
+| Export run ID | `cc452b6d6a084958878662c02a10d85e` |
+| Training run ID | `a6a0b5bc203244739d3265ea31ef2a95` |
+| Attempt ID | `1ea43c80-3844-48e2-bed0-620d510b3266` |
+| Candidate Registry version | 3 |
+| Selected champion | 2 |
+| Promotion | false: `f1_not_improved` |
+| Candidate and champion F1 | 0.6538461538461539 |
+| Automatic-run tagging | completed |
+
+The candidate was retained in the Registry, while the existing champion was
+selected because the validation F1 scores were equal. This is a successful
+rejection result, not a failed training run.
+
+A second one-shot container invocation completed with `duplicate_input` for
+`b740c7a32109e28365b89752a09e6096.dir:64dc883661cde200d28e59ce1c48af2e`.
+Its monitoring window ended at `2026-11-23T20:38:01.833203Z` and contained
+101 valid events. The export uploaded only one new event to run
+`b3ff97f3d8a341afa9ffa74dffe27e43`. No training call was made by that cycle.
+This verifies persistent duplicate protection across separate worker containers.
+The individual post-training prediction response was not included in this
+record; the additional persisted event alone does not establish its served version.
+
+The requests repeated identical input as synthetic test traffic. The drift
+result verifies the integration and does not establish production-data drift.
+The emitted dependency warnings did not prevent completion.
+
+This record does not claim a Docker promotion, a directly inspected
+post-training prediction response, or successful CI for the new branch
+before those checks are observed.

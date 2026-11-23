@@ -256,7 +256,8 @@ Exporters are serialized using a separate local SQLite lock file;
 event writes remain possible during upload.
 
 CLI errors produce a nonzero exit status.
-No scheduler, pruning, or deletion is performed.
+The export command does not schedule itself, prune or delete events.
+A separate Compose worker can invoke incremental export periodically.
 
 See the README for command examples and restart/retry instructions.
 
@@ -585,9 +586,10 @@ cache updates and event identities.
 Their DVC training adapter is controlled;
 real-data DVC training is covered separately by lineage integration tests.
 
-The API-log monitoring module is available.
-Connecting its runner, scheduled monitoring, drift-triggered retraining
-and the final dashboard remains subsequent integration work.
+The Compose monitoring worker and dashboard are connected. Optional
+drift-triggered retraining calls the existing verified training pipeline;
+it is not an additional HTTP endpoint and does not change the response
+contracts above. See the [automated retraining guide](automated_retraining.md).
 
 Passing focused tests does not establish full-project CI or deployment status.
 

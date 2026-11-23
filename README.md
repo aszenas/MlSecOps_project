@@ -478,8 +478,8 @@ retry after the first command finishes.
 Keep the database and its export tables.
 Deleting local bookkeeping loses the record of which batches were completed.
 
-No upload scheduler is installed.
-Export is explicitly started by the command.
+The export command can run manually or through the scheduled Compose worker.
+Incremental export bookkeeping is shared by both entry points.
 Only JSON is generated; CSV is not required for the current Task 4.1 artifact.
 
 ## Monitoring actual API prediction logs
@@ -527,6 +527,16 @@ it does not establish drift in representative production traffic.
 For local operation, configuration, report publication and the deterministic
 normal/shifted demo, see the
 [dashboard and monitoring guide](docs/dashboard_monitoring.md).
+
+## Automated monitoring and retraining
+
+The monitoring worker runs sequential cycles using the shared prediction and
+report volumes. Retraining defaults to disabled and is enabled with
+`AUTOMATIC_RETRAINING_ENABLED=true`. The worker uses verified labeled data,
+not predictions as target labels.
+
+See the [automated retraining guide](docs/automated_retraining.md) for
+configuration, one-shot verification, statuses and recovery limitations.
 
 ## Available endpoints
 
@@ -611,11 +621,12 @@ Manual insufficient-data and report-generation scenarios were verified.
 The dashboard also rejects inconsistent drift decisions instead of showing
 a misleading status.
 
-Scheduled monitoring and drift-triggered automatic retraining remain
-subsequent integration tasks.
+The Compose worker schedules monitoring and prediction export. Optional
+automatic retraining requires drift and verified labeled v2 data; persistent
+reservations prevent repeated training of the same input.
 
-The dashboard currently displays the latest valid training-selection audit.
-It does not prove that a distinct automatic retraining job occurred.
+The dashboard displays the latest valid training-selection audit and
+distinguishes automatically marked retraining runs from manual or legacy runs.
 
 Unit and isolated Registry integration tests cover promotion, rejection,
 alias changes, missing champions, backend errors and consistent event versions.
