@@ -1,9 +1,9 @@
 """Decide whether monitoring results allow retraining."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from dataclasses import asdict, dataclass
 
 from predictive_maintenance.data.loader import load_raw_data
 from predictive_maintenance.data.provenance import (
@@ -12,6 +12,14 @@ from predictive_maintenance.data.provenance import (
     verify_dvc_training_file,
 )
 
+from mlflow.exceptions import MlflowException
+
+from predictive_maintenance.models.dvc_training import train_from_dvc
+from predictive_maintenance.models.training import ModelType
+from predictive_maintenance.monitoring.retraining_store import (
+    claim_retraining_attempt,
+    finish_retraining_attempt,
+)
 
 RetrainingDecision = Literal[
     "insufficient_data",
@@ -91,3 +99,67 @@ def verify_retraining_data(
         raw_dvc_hash=raw_hash,
         training_dvc_hash=training_hash,
     )
+
+
+def run_retraining(
+    repository_root: Path,
+    database_path: Path,
+    monitoring_state: Mapping[str, object],
+    tracking_uri: str,
+    model_type: ModelType = "gradient_boosting",
+) -> dict[str, object]:
+    """Train once per verified input when monitoring reports drift."""
+    decision = decide_retraining(monitoring_state)
+    if decision != "waiting_for_labeled_data":
+        return {"status": decision}
+
+    data = verify_retraining_data(repository_root)
+    if data is None:
+        return {"status": "waiting_for_labeled_data"}
+
+    context = {
+        "window_start": monitoring_state.get("window_start"),
+        "window_end": monitoring_state.get("window_end"),
+        "dataset_version": "v2",
+        **asdict(data),
+    }
+    attempt_id = claim_retraining_attempt(
+        database_path=database_path,
+        dataset_key=data.dataset_key,
+        tracking_uri=tracking_uri,
+        model_type=model_type,
+        context=context,
+    )
+    if attempt_id is None:
+        return {
+            "status": "duplicate_input",
+            "dataset_key": data.dataset_key,
+        }
+
+    try:
+        training = train_from_dvc(
+            repository_root=repository_root,
+            model_type=model_type,
+            tracking_uri=tracking_uri,
+            dataset_version="v2",
+        )
+    except (OSError, RuntimeError, ValueError, MlflowException) as exc:
+        failure = {"error": str(exc)}
+        finish_retraining_attempt(
+            database_path, attempt_id, "failed", failure,
+        )
+        return {
+            "status": "failed",
+            "attempt_id": attempt_id,
+            **failure,
+        }
+
+    result = asdict(training)
+    finish_retraining_attempt(
+        database_path, attempt_id, "completed", result,
+    )
+    return {
+        "status": "completed",
+        "attempt_id": attempt_id,
+        "training": result,
+    }
