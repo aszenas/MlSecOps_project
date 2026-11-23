@@ -198,3 +198,5 @@ training file after dataset-version integration.
 Full persistence-check results and the manual `"v2"` training result must
 be recorded after successful execution.
 CI results must be confirmed on the pull request.
+The complete functional and persistence checks must be recorded after
+successful execution. CI results must be confirmed on the pull request.

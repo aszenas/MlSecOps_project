@@ -46,6 +46,9 @@ metadata. Dataset contents are stored in the shared DagsHub DVC remote.
   and `data/processed/training/train_v2.csv.dvc`
 
 Do not commit dataset contents or credentials to Git.
+Do not commit raw dataset files or credentials to Git.
+The processed submission export is versioned separately with
+data/processed/submission.dvc; see the [dataset release and export guide](docs/dataset_release.md).
 
 ## Local setup (PowerShell)
 
