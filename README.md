@@ -10,7 +10,8 @@ MlSecOps_project/
 ├── data/                        # Dataset files, not Python modules
 │   ├── raw/                     # Original CSV, managed by DVC
 │   ├── raw.dvc                  # DVC metadata for the raw dataset
-│   └── processed/               # Processed and versioned training datasets
+│   └── processed/               # Processed and versioned datasets
+│       └── training/            # DVC-managed training datasets
 ├── docs/                        # API contract, workflow, and component handoffs
 ├── infra/                       # Infrastructure configuration
 ├── scripts/                     # Training, export, monitoring, and verification
@@ -41,11 +42,12 @@ metadata. Dataset contents are stored in the shared DagsHub DVC remote.
 - DVC remote name: `dagshub` (default)
 - Raw dataset metadata: `data/raw.dvc`
 - Raw dataset path: `data/raw/predictive_maintenance_5000.csv`
+- Training dataset metadata: `data/processed/training/train_v1.csv.dvc`
+  and `data/processed/training/train_v2.csv.dvc`
 
 Do not commit dataset contents or credentials to Git.
-Do not commit raw dataset files or credentials to Git.
 The processed submission export is versioned separately with
-data/processed/submission.dvc; see the [dataset release and export guide](docs/dataset_release.md).
+`data/processed/submission.dvc`; see the [dataset release and export guide](docs/dataset_release.md).
 
 ## Local setup (PowerShell)
 
@@ -177,7 +179,7 @@ The API reads these environment variables when a service operation runs:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TRAINING_REPOSITORY_ROOT` | Application repository root | Repository containing the training dataset and Git/DVC metadata |
+| `TRAINING_REPOSITORY_ROOT` | Application repository root | Repository containing the training datasets and Git/DVC metadata |
 | `MLFLOW_TRACKING_URI` | `http://127.0.0.1:5000` | Shared MLflow backend for API training and prediction |
 
 Normal local development does not require `TRAINING_REPOSITORY_ROOT`.
@@ -188,18 +190,21 @@ before starting the server:
 $env:TRAINING_REPOSITORY_ROOT = "C:/path/to/MlSecOps_project"
 ```
 
-Training reads `data/raw/predictive_maintenance_5000.csv` beneath that root.
-The root must be absolute, and explicitly empty or whitespace-only settings
-are rejected.
+Both training versions require
+`data/raw/predictive_maintenance_5000.csv` beneath that root.
+Version `"v2"` additionally requires
+`data/processed/training/train_v2.csv`.
 
-The HTTP request cannot override either server setting.
+The root must be absolute, and explicitly empty or whitespace-only settings
+are rejected. The HTTP request cannot override either server setting.
 Changing the training root does not move the prediction-event database.
 
 The API calls `train_from_dvc(...)` with these server-controlled settings.
-Before training, restore the data and verify that the training checkout is clean:
+Before training, restore the required data and verify that the training
+checkout is clean:
 
 ```powershell
-python -m dvc pull data/raw.dvc -r dagshub
+python -m dvc pull data/raw.dvc data/processed/training/train_v2.csv.dvc -r dagshub
 git status --short
 ```
 
@@ -209,7 +214,7 @@ is rejected by provenance validation.
 
 The API still runs from its application repository root because model logging
 uses its relative `src/` code path. A separate training checkout supplies the
-dataset and its Git/DVC provenance; it does not change the running API code.
+datasets and their Git/DVC provenance; it does not change the running API code.
 
 #### Training request
 
@@ -218,28 +223,50 @@ In Swagger UI, call `POST /train` with:
 ```json
 {
   "dataset_id": "default",
+  "dataset_version": "v1",
   "model_type": "gradient_boosting",
   "random_state": 42
 }
 ```
 
-`xgboost` is also supported. Training verifies the Git/DVC dataset, logs the
+`dataset_version` accepts `"v1"` or `"v2"` and defaults to `"v1"`.
+
+- `"v1"` uses the initial training partition.
+- `"v2"` uses the verified expanded labeled training dataset.
+
+Both versions preserve the original validation and final-test partitions.
+
+To request `"v2"` with the other default settings:
+
+```json
+{
+  "dataset_version": "v2"
+}
+```
+
+An empty object `{}` uses all defaults, including `"v1"`.
+Unsupported versions and explicit null values return HTTP `422`.
+
+`xgboost` is also supported. Training verifies the Git/DVC data, logs the
 model, registers a candidate version and runs audited champion selection.
 
 The response includes the run, logged-model URI, six validation metrics,
 candidate version, selected champion version, `promoted`, and `selection_reason`.
+The response does not include a `dataset_version` field.
+
+Dataset versions (`"v1"` and `"v2"`) are separate from numeric MLflow
+Registry model versions.
 
 Inspect the run in `predictive-maintenance-baselines` and the registered model
-`predictive-maintenance-model` in MLflow.
+`predictive-maintenance-model` in MLflow. The `champion` alias identifies the
+currently selected version.
 
-The `champion` alias identifies the currently selected version.
 Promotion requires recall of at least 0.70 and, when a champion exists,
 a strictly higher F1 score on the validation partition.
-
 An equal or worse candidate stays registered without replacing the champion.
 
-A completed training operation does not guarantee promotion.
-If the first candidate is rejected, `champion_version` is null
+A completed training operation does not guarantee promotion, including when
+using `"v2"`. If the first candidate is rejected, `champion_version` is null
 and prediction remains unavailable.
 
 On successful promotion, the next prediction resolves the new version
@@ -506,7 +533,7 @@ normal/shifted demo, see the
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` | Check API responsiveness; returns `{"status": "ok"}` |
-| POST | `/train` | Verify data, train, register and conditionally select a champion |
+| POST | `/train` | Train with `"v1"` or `"v2"`, register and conditionally select a champion |
 | POST | `/predict` | Predict using the current champion and record its concrete version |
 
 Successful requests return HTTP `200`.
@@ -566,15 +593,16 @@ Resolve actual errors and make sure it uses the intended Python interpreter.
 
 ## Current scope and remaining work
 
-The API integrates verified DVC training, Registry registration and audited
-champion selection.
+The API integrates verified DVC training with dataset versions `"v1"` and `"v2"`,
+Registry registration and audited champion selection.
 
 Prediction resolves the champion per request and caches concrete model versions.
 Responses and persistent events identify the model actually used.
 Prediction export and historical snapshots remain available.
 
 Docker Compose runs the API, MLflow and the monitoring dashboard with
-persistent storage.
+persistent storage. Its preparation service restores and verifies the raw
+dataset and the `"v2"` training file.
 
 The monitoring command reads actual API prediction events and publishes
 reports consumed by the dashboard.
@@ -589,19 +617,18 @@ subsequent integration tasks.
 The dashboard currently displays the latest valid training-selection audit.
 It does not prove that a distinct automatic retraining job occurred.
 
+Unit and isolated Registry integration tests cover promotion, rejection,
+alias changes, missing champions, backend errors and consistent event versions.
+API and service tests also cover dataset-version selection and validation.
+
 Passing focused tests does not establish full-project CI or deployment status.
 Review CI and the relevant runtime results before merging.
 
 ## Component documentation
-For verified dataset versions, reproducible training commands and split
-manifests, see the [DVC–MLflow integration guide](docs/dvc_mlflow_lineage.md).
-
-For the versioned submission export, its schema, regeneration CLI, DVC restore,
-and clean-clone verification, see the [dataset release and export guide](docs/dataset_release.md).
-## Docker
 
 - [API contract](docs/api_contract.md)
 - [Monitoring documentation](docs/monitoring.md)
 - [Dashboard and monitoring guide](docs/dashboard_monitoring.md)
 - [DVC–MLflow integration guide](docs/dvc_mlflow_lineage.md)
+- [Dataset release and export guide](docs/dataset_release.md)
 - [Docker Compose instructions](docs/docker.md)
