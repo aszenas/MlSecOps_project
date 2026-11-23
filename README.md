@@ -43,6 +43,9 @@ metadata. Dataset contents are stored in the shared DagsHub DVC remote.
 - Raw dataset path: `data/raw/predictive_maintenance_5000.csv`
 
 Do not commit dataset contents or credentials to Git.
+Do not commit raw dataset files or credentials to Git.
+The processed submission export is versioned separately with
+data/processed/submission.dvc; see the [dataset release and export guide](docs/dataset_release.md).
 
 ## Local setup (PowerShell)
 
@@ -590,6 +593,12 @@ Passing focused tests does not establish full-project CI or deployment status.
 Review CI and the relevant runtime results before merging.
 
 ## Component documentation
+For verified dataset versions, reproducible training commands and split
+manifests, see the [DVC–MLflow integration guide](docs/dvc_mlflow_lineage.md).
+
+For the versioned submission export, its schema, regeneration CLI, DVC restore,
+and clean-clone verification, see the [dataset release and export guide](docs/dataset_release.md).
+## Docker
 
 - [API contract](docs/api_contract.md)
 - [Monitoring documentation](docs/monitoring.md)

@@ -258,3 +258,5 @@ production-data drift.
 
 Complete persistence-check results must be recorded after successful execution.
 CI results must be confirmed on the pull request.
+The complete functional and persistence checks must be recorded after
+successful execution. CI results must be confirmed on the pull request.
