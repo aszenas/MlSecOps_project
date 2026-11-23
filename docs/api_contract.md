@@ -574,8 +574,7 @@ Persistent prediction storage and JSON artifact export are implemented.
 The retained mock services are not used by current routes.
 `/health` only checks API responsiveness.
 
-Docker Compose provides the API, MLflow, persistent storage and a temporary
-Streamlit page.
+Docker Compose provides the API, MLflow, persistent storage and Streamlit page.
 The preparation service restores and verifies the raw data and `"v2"` training file.
 
 API and service unit tests isolate external dependencies.
