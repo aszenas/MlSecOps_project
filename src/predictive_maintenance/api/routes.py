@@ -96,7 +96,10 @@ def predict(data: PredictionRequest, response: Response) -> PredictionResponse:
 @router.post("/train", response_model=RegistryTrainingResponse)
 def train(data: TrainingRequest) -> RegistryTrainingResponse:
     try:
-        result = train_pipeline(model_type=data.model_type)
+        result = train_pipeline(
+            model_type=data.model_type,
+            dataset_version=data.dataset_version,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=503,

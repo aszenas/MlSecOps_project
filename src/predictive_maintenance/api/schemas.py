@@ -2,6 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from predictive_maintenance.models.training import ModelType
+from predictive_maintenance.data.split_manifest import DatasetVersion
 
 PREDICTION_EXAMPLE = {
     "type": "L",
@@ -14,6 +15,7 @@ PREDICTION_EXAMPLE = {
 
 TRAINING_EXAMPLE = {
     "dataset_id": "default",
+    "dataset_version": "v1",
     "model_type": "gradient_boosting",
     "random_state": 42,
 }
@@ -74,6 +76,7 @@ class TrainingRequest(BaseModel):
     )
 
     dataset_id: Literal["default"] = "default"
+    dataset_version: DatasetVersion = "v1"
     model_type: ModelType = "gradient_boosting"
     random_state: Literal[42] = 42
 

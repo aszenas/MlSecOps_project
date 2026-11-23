@@ -25,6 +25,7 @@ from predictive_maintenance.models.model_registry import REGISTERED_MODEL_NAME, 
 from predictive_maintenance.models.model_selection import evaluate_and_select_champion
 from predictive_maintenance.models.training import ModelType
 from predictive_maintenance.models.training_registry import TrainingRegistryResult
+from predictive_maintenance.data.split_manifest import DatasetVersion
 
 
 @pytest.fixture
@@ -99,15 +100,22 @@ def test_api_observes_real_registry_promotion_and_rejection(
     assert first.json()["prediction"] == 1
 
     def training_adapter(
-        repository_root: Path, model_type: ModelType, tracking_uri: str | None,
+        repository_root: Path,
+        model_type: ModelType,
+        tracking_uri: str | None,
+        *,
+        dataset_version: DatasetVersion = "v1",
     ) -> TrainingRegistryResult:
         assert repository_root == events.parent
         assert model_type == "gradient_boosting"
         assert tracking_uri == uri
+        assert dataset_version == "v1"
         run_id, model_uri, candidate = register_candidate(perfect=True)
         features, target = validation_data()
         selection = evaluate_and_select_champion(candidate, features, target)
-        return TrainingRegistryResult(run_id, model_uri, REGISTERED_MODEL_NAME, candidate, selection)
+        return TrainingRegistryResult(
+            run_id, model_uri, REGISTERED_MODEL_NAME, candidate, selection,
+        )
 
     training = MagicMock(side_effect=training_adapter)
     monkeypatch.setattr(services, "train_from_dvc", training)
