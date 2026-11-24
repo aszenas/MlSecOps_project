@@ -1,0 +1,109 @@
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+from predictive_maintenance.models.training import ModelType
+from predictive_maintenance.data.split_manifest import DatasetVersion
+
+PREDICTION_EXAMPLE = {
+    "type": "L",
+    "air_temperature_k": 300.8,
+    "process_temperature_k": 310.3,
+    "rotational_speed_rpm": 1538,
+    "torque_nm": 36.1,
+    "tool_wear_min": 198,
+}
+
+TRAINING_EXAMPLE = {
+    "dataset_id": "default",
+    "dataset_version": "v1",
+    "model_type": "gradient_boosting",
+    "random_state": 42,
+}
+
+PREDICTION_RESPONSE_EXAMPLE = {
+    "prediction": 0,
+    "probability": 0.1,
+    "model_version": "2",
+    "mode": "real",
+}
+
+TRAINING_RESPONSE_EXAMPLE = {
+    "status": "completed",
+    "training_run_id": "example-run-id",
+    "model_type": "gradient_boosting",
+    "model_uri": "models:/m-example-candidate",
+    "metrics": {
+        "accuracy": 0.95, "precision": 0.8, "recall": 0.75,
+        "f1": 0.77, "roc_auc": 0.9, "average_precision": 0.85,
+    },
+    "mode": "real",
+    "registered_model_name": "predictive-maintenance-model",
+    "registered_version": "2",
+    "champion_version": "2",
+    "champion_version_before": "1",
+    "promoted": True,
+    "selection_reason": "higher_f1",
+}
+
+
+class PredictionRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [PREDICTION_EXAMPLE]},
+    )
+
+    type: Literal["L", "M", "H"]
+    air_temperature_k: float = Field(gt=0, allow_inf_nan=False)
+    process_temperature_k: float = Field(gt=0, allow_inf_nan=False)
+    rotational_speed_rpm: float = Field(ge=0, allow_inf_nan=False)
+    torque_nm: float = Field(ge=0, allow_inf_nan=False)
+    tool_wear_min: float = Field(ge=0, allow_inf_nan=False)
+
+
+class PredictionResponse(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [PREDICTION_RESPONSE_EXAMPLE]})
+
+    prediction: Literal[0, 1]
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    model_version: str
+    mode: Literal["mock", "real"]
+
+
+class TrainingRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [TRAINING_EXAMPLE]},
+    )
+
+    dataset_id: Literal["default"] = "default"
+    dataset_version: DatasetVersion = "v1"
+    model_type: ModelType = "gradient_boosting"
+    random_state: Literal[42] = 42
+
+
+class TrainingResponse(BaseModel):
+    status: Literal["completed"]
+    training_run_id: str
+    model_type: ModelType
+    model_uri: str
+    metrics: dict[str, float]
+    mode: Literal["real"]
+
+
+class RegistryTrainingResponse(TrainingResponse):
+    """Report the candidate separately from the selected champion."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [TRAINING_RESPONSE_EXAMPLE]})
+
+    registered_model_name: str = Field(min_length=1)
+    registered_version: str = Field(pattern=r"^[1-9][0-9]*$")
+    champion_version: str | None = Field(pattern=r"^[1-9][0-9]*$")
+    champion_version_before: str | None = Field(pattern=r"^[1-9][0-9]*$")
+    promoted: bool
+    selection_reason: str = Field(min_length=1)
+
+
+class MockTrainingResponse(BaseModel):
+    status: Literal["mock_completed"]
+    training_run_id: None = None
+    mode: Literal["mock"] = "mock"
